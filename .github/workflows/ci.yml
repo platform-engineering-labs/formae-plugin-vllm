@@ -159,15 +159,16 @@ jobs:
           role-to-assume: arn:aws:iam::226695765433:role/github-pel
           role-session-name: vllm-conformance-${{ github.run_id }}
 
-      - name: Build formae CLI (latest stable tag) for provisioning
+      - name: Install stable formae (PEL store in a user path; no sudo)
         run: |
-          git clone https://github.com/platform-engineering-labs/formae.git /tmp/formae
-          cd /tmp/formae
-          TAG=$(git tag -l "[0-9]*" --sort=-version:refname | grep -v -- '-' | head -1)
-          echo "Building formae $TAG"
-          git checkout "$TAG"
-          make build VERSION="$TAG"
-          echo "FORMAE_BINARY=/tmp/formae/formae" >> "$GITHUB_ENV"
+          PEL_ROOT="$HOME/pel"
+          # pelmgr (orbital) sets up a proper PEL store so `formae plugin install`
+          # works. --install-path keeps it user-writable (default /opt/pel needs root).
+          bash -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- \
+            install --yes --channel stable --install-path "$PEL_ROOT" formae pkl
+          echo "$PEL_ROOT/bin" >> "$GITHUB_PATH"
+          echo "FORMAE_PEL_ROOT=$PEL_ROOT" >> "$GITHUB_ENV"
+          "$PEL_ROOT/bin/formae" --help >/dev/null && echo "formae installed at $PEL_ROOT"
 
       - name: Conformance against a formae-provisioned GPU vLLM box (dogfood)
         env:
