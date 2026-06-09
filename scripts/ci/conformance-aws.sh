@@ -49,7 +49,7 @@ wait_cmd() { # $1=id $2=timeout
 
 teardown() {
   log "Tearing down (formae destroy)..."
-  if "$FORMAE" destroy --mode reconcile --yes "$BOX" >/tmp/conf-aws-destroy.log 2>&1; then
+  if "$FORMAE" destroy --yes "$BOX" >/tmp/conf-aws-destroy.log 2>&1; then
     local cid; cid=$(latest_cmd destroy)
     [ -n "$cid" ] && wait_cmd "$cid" 300 || true
   else
@@ -60,10 +60,18 @@ teardown() {
 }
 trap teardown EXIT
 
-# 1) plugins: aws (to provision) + this plugin (vllm) installed from source.
-log "Installing aws plugin + building/installing vllm plugin..."
-"$FORMAE" plugin install aws >/dev/null 2>&1 || log "aws plugin install returned nonzero (may already be installed)"
+# 1) plugins: aws (to provision) + this plugin (vllm). Install BEFORE the agent
+# starts so it loads them. Fail loudly — a missing aws plugin makes the apply hang.
+log "Installing aws plugin..."
+if ! "$FORMAE" plugin install aws 2>&1 | sed 's/^/[plugin-install] /'; then
+  log "ERROR: 'formae plugin install aws' failed"; exit 1
+fi
+log "Building + installing the vllm plugin..."
 make -C "$REPO_ROOT" install >/dev/null
+log "Installed plugins:"; "$FORMAE" plugin list 2>&1 | sed 's/^/[plugin-list] /' || true
+if ! "$FORMAE" plugin list 2>/dev/null | grep -qiE '(^|[^a-z])aws([^a-z]|$)'; then
+  log "ERROR: aws plugin not present after install"; exit 1
+fi
 
 # 2) ensure a formae agent is running for apply/destroy.
 if ! "$FORMAE" status agent >/dev/null 2>&1; then
@@ -71,6 +79,7 @@ if ! "$FORMAE" status agent >/dev/null 2>&1; then
   "$FORMAE" agent start >/tmp/conf-aws-agent.log 2>&1 &
   STARTED_AGENT=1
   for _ in $(seq 1 30); do "$FORMAE" status agent >/dev/null 2>&1 && break; sleep 2; done
+  "$FORMAE" status agent >/dev/null 2>&1 || { log "ERROR: agent did not become ready"; cat /tmp/conf-aws-agent.log >&2 || true; exit 1; }
 fi
 
 # 3) provision the GPU vLLM box (dogfood the AWS plugin).
