@@ -153,7 +153,7 @@ jobs:
           pkl-version: 0.30.0
 
       - name: Configure AWS credentials (assume github-pel via OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-region: us-east-1
           role-to-assume: arn:aws:iam::226695765433:role/github-pel
