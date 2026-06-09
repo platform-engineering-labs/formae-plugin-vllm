@@ -1,0 +1,99 @@
+// NOT YET VALIDATED against the AWS plugin schema — verify resource types/fields
+// before apply. Field names below were authored against
+// formae-plugin-aws/schema/pkl/ec2/{instance,securitygroup,securitygroupingress}.pkl
+// but this forma has NOT been applied. In particular, confirm:
+//   - the AMI id for your region (a GPU-ready Deep Learning / Ubuntu AMI),
+//   - whether userData must be base64-encoded for the AWS CloudControl provider,
+//   - the published aws schema version pinned in this dir's PklProject.
+//
+/*
+ * AWS dogfood example: bring up a single GPU EC2 box running vLLM.
+ *
+ * Two-step dogfood flow:
+ *   1) apply THIS forma (uses the formae AWS plugin) to launch a g4dn.xlarge
+ *      (Tesla T4 — on Sector 88's supported-hardware list) running the vLLM
+ *      container with runtime LoRA loading enabled.
+ *   2) once the box is up, fill the public IP into adapter.pkl and apply that
+ *      (uses the vLLM plugin) to manage the LoRA adapter.
+ *
+ * ⚠️ This launches BILLABLE infrastructure (~$0.53/hr for g4dn.xlarge).
+ *    Apply manually, only with explicit go-ahead, and destroy when done.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/ec2/instance.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+
+properties {
+  // CIDR allowed to reach the vLLM OpenAI port (8000). Lock this down to your
+  // own IP/range; 0.0.0.0/0 exposes the endpoint to the whole internet.
+  allowedCidr = new formae.Prop {
+    flag = "allowed-cidr"
+    default = "0.0.0.0/0"
+  }
+  // A GPU-capable AMI in your region (Deep Learning AMI / Ubuntu w/ NVIDIA).
+  amiId = new formae.Prop {
+    flag = "ami-id"
+    default = "ami-0ecf75a98fe8519d7"
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "vllm-aws-box"
+    description = "GPU EC2 box running vLLM (dogfood of the AWS plugin)"
+  }
+
+  new formae.Target {
+    label = "aws-gpu"
+    config = new aws.Config {
+      region = "us-east-1"
+    }
+  }
+
+  local sg = new securitygroup.SecurityGroup {
+    label = "vllm-sg"
+    groupDescription = "Allow tcp/8000 to the vLLM OpenAI endpoint"
+  }
+  sg
+
+  local vllmIngress = new securitygroupingress.SecurityGroupIngress {
+    label = "vllm-ingress-8000"
+    ipProtocol = "tcp"
+    fromPort = 8000
+    toPort = 8000
+    cidrIp = properties.allowedCidr.value
+    groupId = sg.res.groupId
+  }
+  vllmIngress
+
+  new instance.Instance {
+    label = "vllm-box"
+    imageId = properties.amiId.value
+    instanceType = "g4dn.xlarge"
+    securityGroupIds {
+      sg.res.groupId
+    }
+    // Installs Docker and starts the vLLM container with runtime LoRA loading.
+    // NOTE: confirm whether the AWS provider expects this base64-encoded.
+    userData = """
+      #!/bin/bash
+      set -euxo pipefail
+      curl -fsSL https://get.docker.com | sh
+      systemctl enable --now docker
+      docker run -d --restart unless-stopped --gpus all \\
+        -p 8000:8000 \\
+        -e VLLM_ALLOW_RUNTIME_LORA_UPDATING=True \\
+        -v /opt/models:/models \\
+        vllm/vllm-openai:latest \\
+          --model Qwen/Qwen2.5-0.5B-Instruct \\
+          --enable-lora --max-lora-rank 32
+      """
+    tags {
+      new { key = "Name"; value = "vllm-box" }
+    }
+  }
+}

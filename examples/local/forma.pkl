@@ -1,0 +1,40 @@
+/*
+ * Local Docker (GPU) example for the formae vLLM plugin.
+ *
+ * Declares a single LoRA adapter on a vLLM server running locally via
+ * docker-compose.yml (Qwen/Qwen2.5-0.5B-Instruct on http://localhost:8000).
+ *
+ * Apply with:
+ *   formae apply --mode reconcile --simulate examples/local/forma.pkl   # dry run
+ *   formae apply --mode reconcile examples/local/forma.pkl              # for real
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@vllm/core/vllm.pkl"
+
+forma {
+  new formae.Stack {
+    label = "vllm-local"
+    description = "Local Docker vLLM adapter example"
+  }
+
+  new formae.Target {
+    label = "local-vllm"
+    namespace = "VLLM"
+    config = new Mapping {
+      ["Type"] = "vllm"
+      ["BaseUrl"] = "http://localhost:8000"
+    }
+  }
+
+  new vllm.LoRAAdapter {
+    label = "demo-adapter"
+    loraName = "demo"
+    // loraPath must already exist on the vLLM node. With docker-compose.yml the
+    // ./models dir is mounted at /models, so copy/rsync the adapter into
+    // ./models/demo-adapter (air-gapped: stage it on the node before applying).
+    loraPath = "/models/demo-adapter"
+    baseModelName = "Qwen/Qwen2.5-0.5B-Instruct"
+  }
+}

@@ -1,0 +1,30 @@
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@vllm/core/vllm.pkl"
+
+local stackName = "plugin-sdk-test-stack"
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "Plugin SDK conformance test stack"
+  }
+
+  new formae.Target {
+    label = "vllm-target"
+    namespace = "VLLM"
+    config = new Mapping {
+      ["Type"] = "vllm"
+      ["BaseUrl"] = read("env:VLLM_URL")
+    }
+  }
+
+  new vllm.LoRAAdapter {
+    label = "plugin-sdk-test-resource"
+    loraName = "conf-\(testRunID)"
+    loraPath = "/adapters/qwen-chatbot-v2"   // CHANGED to a second real adapter dir (mutable → in-place update)
+    baseModelName = "Qwen/Qwen2.5-0.5B-Instruct"
+  }
+}

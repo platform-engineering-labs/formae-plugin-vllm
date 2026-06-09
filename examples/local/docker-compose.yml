@@ -1,0 +1,32 @@
+# Local GPU vLLM server for the formae vLLM plugin example.
+#
+# Serves Qwen/Qwen2.5-0.5B-Instruct over an OpenAI-compatible API on :8000
+# with runtime LoRA loading enabled so formae can attach/detach adapters.
+#
+# Requires the NVIDIA Container Toolkit (see README.md). On Blackwell GPUs
+# (e.g. RTX 5090, sm_120) make sure the pinned vllm image ships sm_120 kernels.
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    command:
+      - "--model"
+      - "Qwen/Qwen2.5-0.5B-Instruct"
+      - "--enable-lora"
+      - "--max-lora-rank"
+      - "32"
+    environment:
+      # Required so /v1/load_lora_adapter and /v1/unload_lora_adapter are accepted.
+      VLLM_ALLOW_RUNTIME_LORA_UPDATING: "True"
+    ports:
+      - "8000:8000"
+    volumes:
+      # Adapter artifacts live on the node's filesystem; vLLM reads loraPath
+      # from here. In an air-gapped setup, copy/rsync adapters into ./models first.
+      - "./models:/models"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

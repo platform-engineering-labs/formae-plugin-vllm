@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'  # Nightly at 3 AM UTC
+  workflow_dispatch:
+    inputs:
+      run_conformance:
+        description: 'Run conformance tests'
+        required: false
+        default: 'false'
+        type: boolean
+      formae_version:
+        description: 'Formae version to test against (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set up Pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test-unit
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8.0.0
+        with:
+          version: latest
+
+  pkl-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Validate Pkl schemas
+        run: |
+          pkl eval formae-plugin.pkl --format json > /dev/null
+          echo "Manifest validated successfully"
+
+  verify-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set up Pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Verify schema
+        run: make verify-schema
+
+  # Integration tests run against an in-process fake vLLM server (httptest) — no
+  # GPU, Docker, cloud credentials or network required — so they run on every CI.
+  integration-tests:
+    needs: [build, lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set up Pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Run integration tests
+        run: make install && go test -tags=integration -count=1 .
+
+  # Conformance runs against a REAL vLLM. `make conformance-test` boots a CPU-only
+  # vLLM container (Docker is preinstalled on ubuntu-latest — no GPU, no cloud
+  # credentials) and runs the CRUD + discovery lifecycle through a real formae
+  # agent, then tears the container down. The agent itself is fetched from the
+  # formae hub (>= minFormaeVersion in formae-plugin.pkl).
+  #
+  # Runs on push, PR, nightly and manual dispatch.
+  #
+  # NOTE: the prebuilt CPU vLLM image assumes AVX-512. GitHub-hosted runners do
+  # not all expose it; the job checks and fails fast with guidance if it is
+  # missing. If GitHub-hosted runners lack AVX-512, point this job at a
+  # self-hosted runner that has it (e.g. `runs-on: [self-hosted, avx512]`).
+  conformance-tests:
+    needs: [build, lint, pkl-validate, verify-schema]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set up Pkl
+        uses: pkl-community/setup-pkl@v0
+        with:
+          pkl-version: 0.30.0
+
+      - name: Check CPU supports AVX-512 (required by the prebuilt vLLM CPU image)
+        run: |
+          if ! grep -qm1 avx512 /proc/cpuinfo; then
+            echo "::error::This runner's CPU lacks AVX-512; the prebuilt vLLM CPU image will not run."
+            echo "Use a runner with AVX-512, or build a vLLM CPU image with AVX2 fallback."
+            lscpu | grep -i flags || true
+            exit 1
+          fi
+          echo "AVX-512 present."
+
+      - name: Run conformance tests (boots real CPU vLLM container)
+        env:
+          FORMAE_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: make conformance-test TIMEOUT=20m

@@ -1,0 +1,44 @@
+/*
+ * Kubernetes example for the formae vLLM plugin.
+ *
+ * vLLM is provisioned by Kubernetes (see vllm-deployment.yaml); formae manages
+ * LoRA adapters against the vLLM Service. The PVC mounted at /models/adapters is
+ * the adapter distribution layer.
+ *
+ * Apply with:
+ *   formae apply --mode reconcile --simulate examples/kubernetes/forma.pkl
+ *   formae apply --mode reconcile           examples/kubernetes/forma.pkl
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@vllm/core/vllm.pkl"
+
+forma {
+  new formae.Stack {
+    label = "vllm-k8s"
+    description = "Kubernetes vLLM adapter example"
+  }
+
+  new formae.Target {
+    label = "k8s-vllm"
+    namespace = "VLLM"
+    config = new Mapping {
+      ["Type"] = "vllm"
+      // In-cluster DNS name of the vLLM Service (default namespace).
+      // For out-of-cluster access, run:
+      //   kubectl port-forward svc/vllm 8000:8000
+      // and use "http://localhost:8000" instead.
+      ["BaseUrl"] = "http://vllm.default.svc.cluster.local:8000"
+    }
+  }
+
+  new vllm.LoRAAdapter {
+    label = "demo-adapter"
+    loraName = "demo"
+    // Path on the PVC mounted into the vLLM pod at /models/adapters.
+    // Stage the adapter onto the PVC before applying.
+    loraPath = "/models/adapters/demo-adapter"
+    baseModelName = "Qwen/Qwen2.5-0.5B-Instruct"
+  }
+}
