@@ -117,20 +117,19 @@ jobs:
         run: make install && go test -tags=integration -count=1 .
 
   # Conformance runs against a REAL vLLM. `make conformance-test` boots a CPU-only
-  # vLLM container (Docker is preinstalled on ubuntu-latest — no GPU, no cloud
-  # credentials) and runs the CRUD + discovery lifecycle through a real formae
-  # agent, then tears the container down. The agent itself is fetched from the
-  # formae hub (>= minFormaeVersion in formae-plugin.pkl).
+  # vLLM container and runs the CRUD + discovery lifecycle through a real formae
+  # agent, then tears the container down. The agent is fetched from the formae hub
+  # (>= minFormaeVersion in formae-plugin.pkl).
   #
   # Runs on push, PR, nightly and manual dispatch.
   #
-  # NOTE: the prebuilt CPU vLLM image assumes AVX-512. GitHub-hosted runners do
-  # not all expose it; the job checks and fails fast with guidance if it is
-  # missing. If GitHub-hosted runners lack AVX-512, point this job at a
-  # self-hosted runner that has it (e.g. `runs-on: [self-hosted, avx512]`).
+  # Runner: GitHub's free ARM64 hosted runner (ubuntu-24.04-arm) with vLLM's arm64
+  # CPU image. ARM has no AVX-512 concept, which sidesteps the x86 prebuilt image's
+  # AVX-512 requirement (GitHub-hosted x86 runners expose AVX-512 only
+  # inconsistently). Stays fully GitHub-hosted — no self-hosted infra.
   conformance-tests:
     needs: [build, lint, pkl-validate, verify-schema]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
 
     steps:
@@ -147,17 +146,8 @@ jobs:
         with:
           pkl-version: 0.30.0
 
-      - name: Check CPU supports AVX-512 (required by the prebuilt vLLM CPU image)
-        run: |
-          if ! grep -qm1 avx512 /proc/cpuinfo; then
-            echo "::error::This runner's CPU lacks AVX-512; the prebuilt vLLM CPU image will not run."
-            echo "Use a runner with AVX-512, or build a vLLM CPU image with AVX2 fallback."
-            lscpu | grep -i flags || true
-            exit 1
-          fi
-          echo "AVX-512 present."
-
-      - name: Run conformance tests (boots real CPU vLLM container)
+      - name: Run conformance tests (boots real arm64 CPU vLLM container)
         env:
           FORMAE_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          VLLM_IMAGE: docker.io/vllm/vllm-openai-cpu:latest-arm64
         run: make conformance-test TIMEOUT=20m
