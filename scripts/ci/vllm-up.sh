@@ -61,28 +61,34 @@ fi
 
 echo "vllm-up: (re)starting container '$VLLM_CONTAINER' on port $VLLM_PORT..."
 docker rm -f "$VLLM_CONTAINER" >/dev/null 2>&1 || true
+# --shm-size: vLLM v1's EngineCore uses /dev/shm for multiprocessing IPC;
+#   Docker's 64MB default is too small and the core proc gets killed during init
+#   (seen on constrained CI runners as "Engine core initialization failed").
+# --enforce-eager + a small KV-cache reservation keep memory/startup modest so it
+#   fits a small (CI) box; plenty for the 0.5B conformance model.
 docker run -d --name "$VLLM_CONTAINER" \
+  --shm-size="${VLLM_SHM_SIZE:-2g}" \
   -p "${VLLM_PORT}:8000" \
   -v "${ADAPTER_ROOT}:/adapters:ro" \
   -v vllm-conformance-hf-cache:/root/.cache/huggingface \
   -e VLLM_ALLOW_RUNTIME_LORA_UPDATING=True \
-  -e VLLM_CPU_KVCACHE_SPACE=4 \
+  -e VLLM_CPU_KVCACHE_SPACE="${VLLM_CPU_KVCACHE_SPACE:-2}" \
   "$VLLM_IMAGE" \
   "$VLLM_BASE_MODEL" \
     --enable-lora --max-lora-rank 16 \
-    --dtype bfloat16 --max-model-len 2048 >/dev/null
+    --dtype bfloat16 --max-model-len 2048 --enforce-eager >/dev/null
 
 echo "vllm-up: waiting up to ${VLLM_READY_TIMEOUT}s for vLLM to become ready..."
 deadline=$((SECONDS + VLLM_READY_TIMEOUT))
 until curl -fsS "http://127.0.0.1:${VLLM_PORT}/v1/models" >/dev/null 2>&1; do
   if ! docker ps --filter "name=^${VLLM_CONTAINER}$" --format '{{.Names}}' | grep -q "$VLLM_CONTAINER"; then
     echo "vllm-up: ERROR container exited during startup. Logs:" >&2
-    docker logs --tail 50 "$VLLM_CONTAINER" >&2 || true
+    docker logs --tail 200 "$VLLM_CONTAINER" >&2 || true
     exit 1
   fi
   if [ "$SECONDS" -ge "$deadline" ]; then
     echo "vllm-up: ERROR timed out after ${VLLM_READY_TIMEOUT}s. Logs:" >&2
-    docker logs --tail 50 "$VLLM_CONTAINER" >&2 || true
+    docker logs --tail 200 "$VLLM_CONTAINER" >&2 || true
     exit 1
   fi
   sleep 3
