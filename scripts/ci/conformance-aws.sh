@@ -50,8 +50,11 @@ wait_cmd() { # $1=id $2=timeout
 teardown() {
   log "Tearing down (formae destroy)..."
   if "$FORMAE" destroy --yes "$BOX" >/tmp/conf-aws-destroy.log 2>&1; then
+    # Generous wait: instance termination + ENI release gate VPC deletion, which
+    # can take several minutes. The agent dies when the CI job ends, so destroy
+    # MUST finish here or networking (VPC/subnet/SG) leaks.
     local cid; cid=$(latest_cmd destroy)
-    [ -n "$cid" ] && wait_cmd "$cid" 300 || true
+    [ -n "$cid" ] && wait_cmd "$cid" 700 || true
   else
     log "WARNING: destroy submit failed; check AWS for leftover vllm-conf-* resources:"
     cat /tmp/conf-aws-destroy.log >&2 || true
