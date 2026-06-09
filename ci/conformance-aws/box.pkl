@@ -1,0 +1,169 @@
+/*
+ * Dogfood provisioning forma for REAL-vLLM conformance.
+ *
+ * formae (AWS plugin) stands up a self-contained network stack + a CPU EC2 box
+ * running vLLM, so `make conformance-test VLLM_EXTERNAL=1 VLLM_URL=http://<ip>:8000`
+ * can run the CRUD + discovery lifecycle against a real, formae-provisioned vLLM.
+ *
+ * The box uses a c7i instance: Sapphire Rapids has AVX-512, which the prebuilt
+ * CPU vLLM image requires (GitHub-hosted runners expose AVX-512 only
+ * inconsistently — hence we provision our own box and dogfood the AWS plugin).
+ *
+ * Flow:
+ *   formae apply   ci/conformance-aws/box.pkl
+ *   IP=$(formae eval ... PublicIp)        # or aws ec2 describe-instances
+ *   make conformance-test VLLM_EXTERNAL=1 VLLM_URL=http://$IP:8000
+ *   formae destroy ci/conformance-aws/box.pkl
+ *
+ * Self-contained: VPC, subnet, IGW, route, SG and instance are all created and
+ * destroyed together. Billable while up (~cents for a short run).
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+import "@aws/ec2/instance.pkl"
+
+properties {
+  region = new formae.Prop { flag = "region"; default = "us-east-1" }
+  az = new formae.Prop { flag = "az"; default = "us-east-1a" }
+  // GPU box: vLLM LoRA needs a CUDA pinned-memory allocator — CPU-only hosts hit a
+  // vLLM bug (is_pin_memory_available() returns True off-WSL with no CUDA -> crash).
+  // The Deep Learning base GPU AMI ships NVIDIA driver + Docker + container toolkit.
+  amiId = new formae.Prop { flag = "ami-id"; default = "ami-0ccab825061167e2b" } // AL2023 base GPU (us-east-1)
+  instanceType = new formae.Prop { flag = "instance-type"; default = "g4dn.xlarge" } // 1x T4 (Sector 88 hardware)
+  // CIDR allowed to reach the vLLM OpenAI port (8000). Lock down in CI to the runner's egress.
+  allowedCidr = new formae.Prop { flag = "allowed-cidr"; default = "0.0.0.0/0" }
+}
+
+forma {
+  new formae.Stack {
+    label = "vllm-conformance-box"
+    description = "Self-contained network + CPU EC2 box running vLLM, for real-vLLM conformance"
+  }
+
+  new formae.Target {
+    label = "aws"
+    config = new aws.Config { region = properties.region.value }
+  }
+
+  local theVpc = new vpc.VPC {
+    label = "vllm-conf-vpc"
+    cidrBlock = "10.42.0.0/16"
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    tags { new { key = "Name"; value = "vllm-conf-vpc" } }
+  }
+  theVpc
+
+  local igw = new internetgateway.InternetGateway {
+    label = "vllm-conf-igw"
+    tags { new { key = "Name"; value = "vllm-conf-igw" } }
+  }
+  igw
+
+  new vpcgatewayattachment.VPCGatewayAttachment {
+    label = "vllm-conf-igw-attach"
+    vpcId = theVpc.res.id
+    internetGatewayId = igw.res.id
+  }
+
+  local theSubnet = new subnet.Subnet {
+    label = "vllm-conf-subnet"
+    vpcId = theVpc.res.id
+    cidrBlock = "10.42.1.0/24"
+    availabilityZone = properties.az.value
+    mapPublicIpOnLaunch = true
+    tags { new { key = "Name"; value = "vllm-conf-subnet" } }
+  }
+  theSubnet
+
+  local rt = new routetable.RouteTable {
+    label = "vllm-conf-rt"
+    vpcId = theVpc.res.id
+    tags { new { key = "Name"; value = "vllm-conf-rt" } }
+  }
+  rt
+
+  new route.Route {
+    label = "vllm-conf-default-route"
+    routeTableId = rt.res.id
+    destinationCidrBlock = "0.0.0.0/0"
+    gatewayId = igw.res.id
+  }
+
+  new subnetroutetableassociation.SubnetRouteTableAssociation {
+    label = "vllm-conf-rt-assoc"
+    subnetId = theSubnet.res.id
+    routeTableId = rt.res.id
+  }
+
+  local sg = new securitygroup.SecurityGroup {
+    label = "vllm-conf-sg"
+    groupDescription = "Allow tcp/8000 to the vLLM OpenAI endpoint"
+    vpcId = theVpc.res.id
+    tags { new { key = "Name"; value = "vllm-conf-sg" } }
+  }
+  sg
+
+  new securitygroupingress.SecurityGroupIngress {
+    label = "vllm-conf-ingress-8000"
+    groupId = sg.res.groupId
+    ipProtocol = "tcp"
+    fromPort = 8000
+    toPort = 8000
+    cidrIp = properties.allowedCidr.value
+  }
+
+  new instance.Instance {
+    label = "vllm-conf-box"
+    imageId = properties.amiId.value
+    instanceType = properties.instanceType.value
+    subnetId = theSubnet.res.id
+    securityGroupIds { sg.res.groupId }
+    tags { new { key = "Name"; value = "vllm-conf-box" } }
+    // Headroom for the GPU AMI (75GB base) + the ~10GB CUDA vLLM image + model.
+    blockDeviceMappings {
+      new instance.BlockDeviceMapping {
+        deviceName = "/dev/xvda"
+        ebs = new instance.EBS {
+          volumeSize = 100
+          volumeType = "gp3"
+          deleteOnTermination = true
+        }
+      }
+    }
+    // Install Docker, stage the real LoRA at the same paths the conformance
+    // testdata uses (/adapters/qwen-chatbot[-v2]), and run the CPU vLLM image.
+    userData = """
+      #!/bin/bash
+      set -euxo pipefail
+      # The Deep Learning base GPU AMI already has Docker + the NVIDIA container toolkit.
+      systemctl enable --now docker
+      mkdir -p /opt/adapters/qwen-chatbot /opt/adapters/qwen-chatbot-v2
+      base=https://huggingface.co/taronklm/Qwen2.5-0.5B-Instruct-lora-chatbot/resolve/main
+      for f in adapter_config.json adapter_model.safetensors; do
+        curl -fsSL "$base/$f" -o "/opt/adapters/qwen-chatbot/$f"
+      done
+      cp /opt/adapters/qwen-chatbot/* /opt/adapters/qwen-chatbot-v2/
+      docker run -d --restart unless-stopped --name vllm --gpus all --shm-size=2g \\
+        -p 8000:8000 -v /opt/adapters:/adapters:ro \\
+        -e VLLM_ALLOW_RUNTIME_LORA_UPDATING=True \\
+        vllm/vllm-openai:v0.22.1 \\
+        --model Qwen/Qwen2.5-0.5B-Instruct --enable-lora --max-lora-rank 16 \\
+        --max-model-len 2048
+      # Stream vLLM logs to the serial console so `aws ec2 get-console-output`
+      # shows startup progress / errors without needing SSH.
+      ( sleep 8; docker logs -f vllm 2>&1 | sed -u 's/^/[vllm] /' > /dev/console 2>&1 ) &
+      """.base64
+  }
+}

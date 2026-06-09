@@ -116,21 +116,27 @@ jobs:
       - name: Run integration tests
         run: make install && go test -tags=integration -count=1 .
 
-  # Conformance runs against a REAL vLLM. `make conformance-test` boots a CPU-only
-  # vLLM container and runs the CRUD + discovery lifecycle through a real formae
-  # agent, then tears the container down. The agent is fetched from the formae hub
-  # (>= minFormaeVersion in formae-plugin.pkl).
+  # Conformance runs against a REAL vLLM — DOGFOODING formae's AWS plugin.
   #
-  # Runs on push, PR, nightly and manual dispatch.
+  # vLLM LoRA needs a CUDA pinned-memory allocator, so a GPU is required (CPU-only
+  # hosts, incl. GitHub-hosted runners, hit a vLLM bug where is_pin_memory_available
+  # returns True off-WSL with no CUDA -> LoRA warmup crashes). GitHub runners have
+  # no GPU, so `scripts/ci/conformance-aws.sh` has formae provision a g4dn (T4) box
+  # running vLLM, runs conformance against it (VLLM_EXTERNAL), then formae destroys
+  # everything (guaranteed teardown). This is the AWS GPU dogfood example, doubling
+  # as the conformance gate.
   #
-  # Runner: GitHub's free ARM64 hosted runner (ubuntu-24.04-arm) with vLLM's arm64
-  # CPU image. ARM has no AVX-512 concept, which sidesteps the x86 prebuilt image's
-  # AVX-512 requirement (GitHub-hosted x86 runners expose AVX-512 only
-  # inconsistently). Stays fully GitHub-hosted — no self-hosted infra.
+  # Main only (push + dispatch + nightly): AWS creds come from the org `github-pel`
+  # OIDC role, whose trust is scoped to refs/heads/main of this repo. Billable
+  # (~$0.13 GPU per run).
   conformance-tests:
     needs: [build, lint, pkl-validate, verify-schema]
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    timeout-minutes: 45
+    permissions:
+      id-token: write   # assume the AWS OIDC role
+      contents: read
 
     steps:
       - name: Checkout
@@ -146,8 +152,25 @@ jobs:
         with:
           pkl-version: 0.30.0
 
-      - name: Run conformance tests (boots real arm64 CPU vLLM container)
+      - name: Configure AWS credentials (assume github-pel via OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::226695765433:role/github-pel
+          role-session-name: vllm-conformance-${{ github.run_id }}
+
+      - name: Build formae CLI (latest stable tag) for provisioning
+        run: |
+          git clone https://github.com/platform-engineering-labs/formae.git /tmp/formae
+          cd /tmp/formae
+          TAG=$(git tag -l "[0-9]*" --sort=-version:refname | grep -v -- '-' | head -1)
+          echo "Building formae $TAG"
+          git checkout "$TAG"
+          make build VERSION="$TAG"
+          echo "FORMAE_BINARY=/tmp/formae/formae" >> "$GITHUB_ENV"
+
+      - name: Conformance against a formae-provisioned GPU vLLM box (dogfood)
         env:
           FORMAE_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          VLLM_IMAGE: docker.io/vllm/vllm-openai-cpu:latest-arm64
-        run: make conformance-test TIMEOUT=20m
+          AWS_REGION: us-east-1
+        run: make conformance-test-aws

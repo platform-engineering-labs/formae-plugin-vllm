@@ -22,7 +22,7 @@ BINARY := $(PLUGIN_NAME)
 PLUGIN_BASE_DIR := $(HOME)/.pel/formae/plugins
 INSTALL_DIR := $(PLUGIN_BASE_DIR)/$(PLUGIN_NAME)/v$(PLUGIN_VERSION)
 
-.PHONY: all build test test-unit test-integration lint verify-schema clean install help clean-environment vllm-up conformance-test
+.PHONY: all build test test-unit test-integration lint verify-schema clean install help clean-environment vllm-up conformance-test conformance-test-aws
 
 all: build
 
@@ -102,8 +102,20 @@ export FORMAE_TEST_RUN_ID ?= local-$(shell date +%s)
 vllm-up:
 	@./scripts/ci/vllm-up.sh
 
+## conformance-test-aws: DOGFOOD real-vLLM conformance on AWS. formae's AWS
+## plugin provisions a g4dn (T4) GPU box running vLLM, conformance runs against
+## it, then formae destroys everything (guaranteed teardown). This is the
+## authoritative real-vLLM gate — a GPU is REQUIRED (CPU-only hosts hit a vLLM
+## LoRA pin_memory bug). Billable; needs AWS creds + the formae CLI.
+conformance-test-aws:
+	@./scripts/ci/conformance-aws.sh
+
 ## conformance-test: Boot a real vLLM (CPU container), run CRUD + discovery
-## conformance against it, then tear it down. Requires Docker (no GPU needed).
+## conformance against it, then tear it down. Requires Docker.
+## NOTE: vLLM v0.22.1 has a CPU LoRA bug (is_pin_memory_available wrongly True
+## off-WSL) so this CPU path only works on WSL/GPU hosts; the AWS GPU dogfood
+## (`make conformance-test-aws`) is the portable gate. Use this for quick local
+## checks on a WSL/GPU workstation.
 ## Usage: make conformance-test [TEST=Name] [TIMEOUT=30m]
 ## Set VLLM_EXTERNAL=1 (and VLLM_URL=...) to target an already-running vLLM and
 ## skip the managed container (e.g. a real GPU box).

@@ -1,0 +1,13 @@
+amends "pkl:Project"
+
+// Dogfood provisioning forma for conformance: brings up the vLLM box (and its
+// whole network stack) via formae's AWS plugin. Conformance then runs against
+// the box's endpoint (VLLM_EXTERNAL=1). See box.pkl.
+dependencies {
+  ["formae"] {
+    uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.86.0"
+  }
+  ["aws"] {
+    uri = "package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@0.1.11"
+  }
+}
