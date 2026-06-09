@@ -38,13 +38,16 @@ adapter on it. Serves `Qwen/Qwen2.5-0.5B-Instruct` (Apache-2.0, ungated) on
    curl -s http://localhost:8000/v1/models | jq
    ```
 
-2. **Stage a LoRA adapter.** Download a Qwen2.5-0.5B-compatible LoRA into
-   `./models` (mounted at `/models` in the container). The forma references
-   `/models/demo-adapter`, so place the adapter files there:
+2. **Stage a LoRA adapter.** The forma references `/models/demo-adapter`, and
+   `./models` is mounted at `/models` in the container. Use a real, public,
+   dimension-matched Qwen2.5-0.5B LoRA (the same pair the conformance suite
+   validates):
 
    ```bash
    mkdir -p models/demo-adapter
-   # e.g. copy/rsync your pre-built adapter weights into models/demo-adapter/
+   base=https://huggingface.co/taronklm/Qwen2.5-0.5B-Instruct-lora-chatbot/resolve/main
+   curl -fsSL "$base/adapter_config.json"      -o models/demo-adapter/adapter_config.json
+   curl -fsSL "$base/adapter_model.safetensors" -o models/demo-adapter/adapter_model.safetensors
    ```
 
    In an air-gapped environment, copy/rsync the adapter onto the node first —
