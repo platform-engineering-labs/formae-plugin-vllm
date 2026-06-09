@@ -1,0 +1,62 @@
+/*
+ * vLLM plugin resource schema.
+ */
+module vllm
+
+import "@formae/formae.pkl"
+
+/// A dynamically-loaded LoRA adapter on a running vLLM server.
+/// Once loaded it is addressable as its own model id at inference time.
+@formae.ResourceHint {
+  type = "VLLM::Inference::LoRAAdapter"
+  identifier = "$.loraName"
+}
+class LoRAAdapter extends formae.Resource {
+  fixed hidden type: String = "VLLM::Inference::LoRAAdapter"
+
+  /// Adapter name; also the model id used at inference time. Immutable.
+  @formae.FieldHint { createOnly = true }
+  loraName: String
+
+  /// Filesystem path to the adapter on the vLLM node. Mutable (reload in place).
+  @formae.FieldHint {}
+  loraPath: String
+
+  /// Base model this adapter attaches to. Immutable.
+  @formae.FieldHint { createOnly = true }
+  baseModelName: String?
+
+  /// MoE 3D weight layout. Immutable.
+  @formae.FieldHint { createOnly = true }
+  is3dLoraWeight: Boolean = false
+
+  /// Read-back model id (provider-populated).
+  @formae.FieldHint { hasProviderDefault = true }
+  id: String?
+
+  /// Read-back base model id (provider-populated).
+  @formae.FieldHint { hasProviderDefault = true }
+  parent: String?
+
+  /// Read-back artifact location (provider-populated).
+  @formae.FieldHint { hasProviderDefault = true }
+  root: String?
+}
+
+/// A base model served by a vLLM node. Discovery / read-only:
+/// base models are set at vLLM startup, not via the API.
+@formae.ResourceHint {
+  type = "VLLM::Inference::Model"
+  identifier = "$.id"
+}
+class Model extends formae.Resource {
+  fixed hidden type: String = "VLLM::Inference::Model"
+
+  /// Served base model id (provider-populated; discovery-only).
+  @formae.FieldHint { hasProviderDefault = true }
+  id: String?
+
+  /// Artifact location (provider-populated).
+  @formae.FieldHint { hasProviderDefault = true }
+  root: String?
+}

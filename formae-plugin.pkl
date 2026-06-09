@@ -1,0 +1,37 @@
+/*
+ * Formae Plugin Manifest
+ *
+ * This file defines metadata for your Formae plugin.
+ * Update the values below to match your plugin.
+ */
+
+// Plugin name used as the directory name and binary name.
+name = "vllm"
+
+// TODO: Update version following semver
+version = "0.1.0"
+
+// Namespace appears in resource type IDs as the uppercase prefix: <NAMESPACE>::<Module>::<Resource>.
+namespace = "VLLM"
+
+// One-line summary shown in `formae plugin list/info` output
+summary = "Manage vLLM LoRA adapters and discover served models"
+
+// Plugin description populated from --description at scaffold time.
+description = "Manage vLLM LoRA adapters and discover served models"
+
+// TODO: Category for the plugin directory listing.
+// Common values: "cloud", "network", "config", "observability", "auth", "other"
+category = "other"
+
+// SPDX license identifier (must be one of: Apache-2.0, BSD-3-Clause, MIT, MPL-2.0 for Hub publishability).
+license = "Apache-2.0"
+
+// Minimum compatible formae agent version. Pinned manually to 0.86.0: this plugin
+// targets the current stable agent. (The SDK's own MinFormaeVersion floor is still
+// 0.84.0 as of pkg/plugin@v0.3.0, so the Makefile no longer auto-stamps this.)
+minFormaeVersion = "0.86.0"
+
+output {
+  renderer = new JsonRenderer {}
+}

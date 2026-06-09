@@ -1,0 +1,35 @@
+/*
+ * AWS dogfood example: manage a LoRA adapter on the GPU box from box.pkl.
+ *
+ * Apply this AFTER box.pkl is up and vLLM is serving. Fill in the EC2 public IP
+ * below (the AWS box's address) before applying.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@vllm/core/vllm.pkl"
+
+forma {
+  new formae.Stack {
+    label = "vllm-aws-adapter"
+    description = "LoRA adapter on the AWS GPU box"
+  }
+
+  new formae.Target {
+    label = "aws-vllm"
+    namespace = "VLLM"
+    config = new Mapping {
+      ["Type"] = "vllm"
+      // TODO: replace <EC2_PUBLIC_IP> with the public IP of the box.pkl instance.
+      ["BaseUrl"] = "http://<EC2_PUBLIC_IP>:8000"
+    }
+  }
+
+  new vllm.LoRAAdapter {
+    label = "demo-adapter"
+    loraName = "demo"
+    // Path on the EC2 box (the box.pkl userData mounts /opt/models at /models).
+    loraPath = "/models/demo-adapter"
+    baseModelName = "Qwen/Qwen2.5-0.5B-Instruct"
+  }
+}
