@@ -60,18 +60,26 @@ teardown() {
 }
 trap teardown EXIT
 
-# 1) plugins: aws (to provision) + this plugin (vllm). Install BEFORE the agent
-# starts so it loads them. Fail loudly — a missing aws plugin makes the apply hang.
-log "Installing aws plugin..."
-if ! "$FORMAE" plugin install aws 2>&1 | sed 's/^/[plugin-install] /'; then
-  log "ERROR: 'formae plugin install aws' failed"; exit 1
+# 1) plugins: a STABLE aws (to provision) + this plugin (vllm) under test.
+# Install BEFORE the agent starts so it loads them. A missing aws plugin makes
+# the apply hang, so we verify presence and fail loudly.
+plugin_present() { # $1 = plugin name; check the system + user plugin dirs on disk
+  local d
+  for d in "${FORMAE_PEL_ROOT:-/opt/pel}/formae/plugins/$1" "/opt/pel/formae/plugins/$1" "$HOME/.pel/formae/plugins/$1"; do
+    [ -d "$d" ] && return 0
+  done
+  return 1
+}
+if plugin_present aws; then
+  log "aws plugin already installed; skipping."
+else
+  log "Installing aws plugin (stable channel)..."
+  "$FORMAE" plugin install aws --channel stable 2>&1 | sed 's/^/[plugin-install] /' \
+    || { log "ERROR: 'formae plugin install aws' failed"; exit 1; }
 fi
-log "Building + installing the vllm plugin..."
+log "Building + installing the vllm plugin under test..."
 make -C "$REPO_ROOT" install >/dev/null
-log "Installed plugins:"; "$FORMAE" plugin list 2>&1 | sed 's/^/[plugin-list] /' || true
-if ! "$FORMAE" plugin list 2>/dev/null | grep -qiE '(^|[^a-z])aws([^a-z]|$)'; then
-  log "ERROR: aws plugin not present after install"; exit 1
-fi
+plugin_present aws || { log "ERROR: aws plugin not present after install"; exit 1; }
 
 # 2) ensure a formae agent is running for apply/destroy.
 if ! "$FORMAE" status agent >/dev/null 2>&1; then
