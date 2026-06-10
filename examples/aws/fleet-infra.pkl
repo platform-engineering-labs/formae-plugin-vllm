@@ -1,0 +1,154 @@
+/*
+ * Fleet infra: 3 GPU EC2 boxes running vLLM (Qwen2.5-0.5B-Instruct), each with
+ * two real LoRA adapters baked to local disk. Phase 1 of the fleet demo; apply
+ * this, then point examples/aws/fleet.pkl at the 3 public IPs.
+ *
+ * Billable: 3x g4dn.xlarge. Apply with explicit go-ahead; destroy when done.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl"
+import "@aws/ec2/securitygroup.pkl"
+import "@aws/ec2/securitygroupingress.pkl"
+import "@aws/ec2/instance.pkl"
+
+properties {
+  region = new formae.Prop { flag = "region"; default = "us-east-1" }
+  az = new formae.Prop { flag = "az"; default = "us-east-1a" }
+  amiId = new formae.Prop { flag = "ami-id"; default = "ami-0ccab825061167e2b" }
+  instanceType = new formae.Prop { flag = "instance-type"; default = "g4dn.xlarge" }
+  allowedCidr = new formae.Prop { flag = "allowed-cidr"; default = "0.0.0.0/0" }
+}
+
+// Fleet size. 2 nodes = 8 G/VT vCPUs (current account quota). Add "c" for the
+// full 3-node demo once the G/VT On-Demand vCPU quota is raised to >= 12.
+local nodeLabels = List("a", "b")
+
+local userDataScript = """
+  #!/bin/bash
+  set -euxo pipefail
+  systemctl enable --now docker
+  hf=https://huggingface.co
+  declare -A repos=( ["chat"]="taronklm/Qwen2.5-0.5B-Instruct-lora-chatbot" ["jailbreak-detector"]="madhurjindal/Jailbreak-Detector-2-XL" )
+  for name in "${!repos[@]}"; do
+    dir="/opt/adapters/$name"; mkdir -p "$dir"
+    for f in adapter_config.json adapter_model.safetensors; do
+      curl -fsSL "$hf/${repos[$name]}/resolve/main/$f" -o "$dir/$f"
+    done
+  done
+  docker run -d --restart unless-stopped --name vllm --gpus all --shm-size=2g \\
+    -p 8000:8000 -v /opt/adapters:/adapters:ro \\
+    -e VLLM_ALLOW_RUNTIME_LORA_UPDATING=True \\
+    vllm/vllm-openai:v0.22.1 \\
+    --model Qwen/Qwen2.5-0.5B-Instruct --enable-lora --max-lora-rank 64 --max-model-len 2048
+  ( sleep 8; docker logs -f vllm 2>&1 | sed -u 's/^/[vllm] /' > /dev/console 2>&1 ) &
+  """
+
+forma {
+  new formae.Stack {
+    label = "vllm-fleet-infra"
+    description = "3 GPU EC2 boxes running vLLM for the fleet demo"
+  }
+
+  new formae.Target {
+    label = "aws"
+    config = new aws.Config { region = properties.region.value }
+  }
+
+  local theVpc = new vpc.VPC {
+    label = "vllm-fleet-vpc"
+    cidrBlock = "10.43.0.0/16"
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    tags { new { key = "Name"; value = "vllm-fleet-vpc" } }
+  }
+  theVpc
+
+  local igw = new internetgateway.InternetGateway {
+    label = "vllm-fleet-igw"
+    tags { new { key = "Name"; value = "vllm-fleet-igw" } }
+  }
+  igw
+
+  new vpcgatewayattachment.VPCGatewayAttachment {
+    label = "vllm-fleet-igw-attach"
+    vpcId = theVpc.res.id
+    internetGatewayId = igw.res.id
+  }
+
+  local theSubnet = new subnet.Subnet {
+    label = "vllm-fleet-subnet"
+    vpcId = theVpc.res.id
+    cidrBlock = "10.43.1.0/24"
+    availabilityZone = properties.az.value
+    mapPublicIpOnLaunch = true
+    tags { new { key = "Name"; value = "vllm-fleet-subnet" } }
+  }
+  theSubnet
+
+  local rt = new routetable.RouteTable {
+    label = "vllm-fleet-rt"
+    vpcId = theVpc.res.id
+    tags { new { key = "Name"; value = "vllm-fleet-rt" } }
+  }
+  rt
+
+  new route.Route {
+    label = "vllm-fleet-default-route"
+    routeTableId = rt.res.id
+    destinationCidrBlock = "0.0.0.0/0"
+    gatewayId = igw.res.id
+  }
+
+  new subnetroutetableassociation.SubnetRouteTableAssociation {
+    label = "vllm-fleet-rt-assoc"
+    subnetId = theSubnet.res.id
+    routeTableId = rt.res.id
+  }
+
+  local sg = new securitygroup.SecurityGroup {
+    label = "vllm-fleet-sg"
+    groupDescription = "Allow tcp/8000 to vLLM on the fleet"
+    vpcId = theVpc.res.id
+    tags { new { key = "Name"; value = "vllm-fleet-sg" } }
+  }
+  sg
+
+  new securitygroupingress.SecurityGroupIngress {
+    label = "vllm-fleet-ingress-8000"
+    groupId = sg.res.groupId
+    ipProtocol = "tcp"
+    fromPort = 8000
+    toPort = 8000
+    cidrIp = properties.allowedCidr.value
+  }
+
+  for (n in nodeLabels) {
+    new instance.Instance {
+      label = "vllm-node-\(n)"
+      imageId = properties.amiId.value
+      instanceType = properties.instanceType.value
+      subnetId = theSubnet.res.id
+      securityGroupIds { sg.res.groupId }
+      tags {
+        new { key = "Name"; value = "vllm-node-\(n)" }
+        new { key = "vllm-fleet"; value = "true" }
+      }
+      blockDeviceMappings {
+        new instance.BlockDeviceMapping {
+          deviceName = "/dev/xvda"
+          ebs = new instance.EBS { volumeSize = 100; volumeType = "gp3"; deleteOnTermination = true }
+        }
+      }
+      userData = userDataScript.base64
+    }
+  }
+}

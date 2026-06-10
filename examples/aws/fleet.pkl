@@ -1,0 +1,56 @@
+/*
+ * Fleet: declare the loaded LoRA-adapter set for 3 vLLM nodes. Apply this AFTER
+ * fleet-infra.pkl is up, with VLLM_URL_A/B/C set to the 3 node IPs.
+ *
+ * The stack has an auto-reconcile policy: with a formae build including PLA-5
+ * (#512), a node that restarts/loses its adapters heals hands-off. On stable
+ * formae, re-apply restores it.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@vllm/core/vllm.pkl"
+
+local base = "Qwen/Qwen2.5-0.5B-Instruct"
+
+local adapters = new Mapping<String, String> {
+  ["chat"] = "/adapters/chat"
+  ["jailbreak-detector"] = "/adapters/jailbreak-detector"
+}
+
+// 2 nodes (matches fleet-infra.pkl's nodeLabels under the current quota). Add
+// ["node-c"] = read("env:VLLM_URL_C") for the full 3-node demo after the bump.
+local nodeUrls = new Mapping<String, String> {
+  ["node-a"] = read("env:VLLM_URL_A")
+  ["node-b"] = read("env:VLLM_URL_B")
+}
+
+forma {
+  new formae.Stack {
+    label = "vllm-fleet"
+    description = "Declared LoRA adapter set across a 3-node vLLM fleet"
+    policies {
+      new formae.AutoReconcilePolicy { label = "fleet-reconcile"; interval = 30.s }
+    }
+  }
+
+  for (nodeLabel, nodeUrl in nodeUrls) {
+    new formae.Target {
+      label = nodeLabel
+      namespace = "VLLM"
+      config = new Mapping { ["Type"] = "vllm"; ["BaseUrl"] = nodeUrl }
+    }
+  }
+
+  for (nodeLabel, _ in nodeUrls) {
+    for (name, path in adapters) {
+      new vllm.LoRAAdapter {
+        label = "\(nodeLabel)-\(name)"
+        target = new formae.TargetResolvable { label = nodeLabel }
+        loraName = name
+        loraPath = path
+        baseModelName = base
+      }
+    }
+  }
+}
