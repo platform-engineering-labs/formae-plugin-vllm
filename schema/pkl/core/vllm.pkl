@@ -5,14 +5,18 @@ module vllm
 
 import "@formae/formae.pkl"
 
+/// The LoRAAdapter resource type id, shared by the resource hint, the resource
+/// class, and the resolvable so the three never drift.
+const loraAdapterType: String = "VLLM::Inference::LoRAAdapter"
+
 /// A dynamically-loaded LoRA adapter on a running vLLM server.
 /// Once loaded it is addressable as its own model id at inference time.
 @formae.ResourceHint {
-  type = "VLLM::Inference::LoRAAdapter"
+  type = loraAdapterType
   identifier = "$.loraName"
 }
 class LoRAAdapter extends formae.Resource {
-  fixed hidden type: String = "VLLM::Inference::LoRAAdapter"
+  fixed hidden type: String = loraAdapterType
 
   /// Adapter name; also the model id used at inference time. Immutable.
   @formae.FieldHint { createOnly = true }
@@ -41,6 +45,31 @@ class LoRAAdapter extends formae.Resource {
   /// Read-back artifact location (provider-populated).
   @formae.FieldHint { hasProviderDefault = true }
   root: String?
+
+  local self = this
+  /// Resolvable handle: reference this adapter's read-back values from other
+  /// resources, e.g. `myAdapter.res.id` (the model id to call at inference time).
+  hidden res: LoRAAdapterResolvable = new {
+    label = self.label
+    stack = self.stack?.label
+  }
+}
+
+/// Resolvable reference to a LoRAAdapter. Exposes the read-back values other
+/// resources can wire to (mirrors the AWS InstanceResolvable pattern).
+open class LoRAAdapterResolvable extends formae.Resolvable {
+  type = loraAdapterType
+
+  /// The model id the inference endpoint returns for this adapter
+  /// (provider-populated; this is the string callers pass as `model`).
+  hidden id: LoRAAdapterResolvable = (this) {
+    property = "id"
+  }
+
+  /// The adapter's loraName as declared at load time.
+  hidden loraName: LoRAAdapterResolvable = (this) {
+    property = "loraName"
+  }
 }
 
 /// A base model served by a vLLM node. Discovery / read-only:
