@@ -32,9 +32,53 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.load(w, r)
 	case "/v1/unload_lora_adapter":
 		s.unload(w, r)
+	case "/v1/chat/completions":
+		s.chat(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// chat is a canned OpenAI-compatible chat-completions endpoint. The real vLLM
+// runs the model; the fake just echoes, so a local demo (e.g. the chat-UI proxy)
+// gets a well-formed reply that names the model it was routed to. Not used by the
+// plugin's CRUD — it exists so the local infra-graph example answers a prompt.
+func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	var prompt string
+	if n := len(req.Messages); n > 0 {
+		prompt = req.Messages[n-1].Content
+	}
+	reply := "[fake vLLM] model '" + req.Model + "' received: " + prompt
+	type message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	type choice struct {
+		Index   int     `json:"index"`
+		Message message `json:"message"`
+	}
+	out := struct {
+		Object  string   `json:"object"`
+		Model   string   `json:"model"`
+		Choices []choice `json:"choices"`
+	}{
+		Object:  "chat.completion",
+		Model:   req.Model,
+		Choices: []choice{{Index: 0, Message: message{Role: "assistant", Content: reply}}},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) listModels(w http.ResponseWriter) {

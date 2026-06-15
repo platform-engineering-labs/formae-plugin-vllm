@@ -1,0 +1,86 @@
+/*
+ * Local, GPU-free infra-graph: fake vLLM -> LoRA adapter -> chat-UI, every edge
+ * a formae resolvable. Proves the same wiring as the AWS fleet demo without a
+ * GPU or any cloud: the chat-UI container's MODEL is wired from the adapter's
+ * read-back id, resolved late at apply time and injected as a compose variable.
+ *
+ * Prereqs (see README.md):
+ *   - a fake vLLM running on the host:  FAKE_VLLM_ADDR=:8077 go run ./cmd/fake-vllm
+ *   - the chat-UI image built locally:  docker build -t formae-chat-ui:demo examples/aws/chat-ui
+ *
+ * Apply (agent must run with FORMAE_PEL_ROOT=$HOME/.pel so the local plugin
+ * builds are used):
+ *   formae apply --mode reconcile --simulate examples/local-graph/forma.pkl
+ *   formae apply --mode reconcile          examples/local-graph/forma.pkl
+ * Then open http://localhost:8088 and chat. Teardown: formae destroy.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@vllm/core/vllm.pkl"
+import "@compose/compose.pkl"
+
+// node-a's chat adapter, pulled into a local so the chat-UI can wire MODEL from
+// its resolvable (demonstrates LoRAAdapterResolvable end to end).
+local chatAdapter = new vllm.LoRAAdapter {
+  label = "chat"
+  target = new formae.TargetResolvable { label = "local-vllm" }
+  loraName = "chat"
+  loraPath = "/models/chat"
+  baseModelName = "base-model"
+}
+
+forma {
+  new formae.Stack {
+    label = "vllm-local-graph"
+    description = "Local infra-graph: fake vLLM adapter wired into a chat-UI container"
+  }
+
+  // vLLM target -> the host's fake vLLM. Host/Port build the BaseURL
+  // (http://localhost:8077) — exercises the new Host/Port target config.
+  new formae.Target {
+    label = "local-vllm"
+    namespace = "VLLM"
+    config = new Mapping {
+      ["Type"] = "vllm"
+      ["Host"] = "localhost"
+      ["Port"] = 8077
+    }
+  }
+
+  // Local Docker target for the chat-UI.
+  new formae.Target {
+    label = "docker"
+    namespace = "DOCKER"
+    config = new compose.Config {}
+  }
+
+  // The adapter loaded into the fake vLLM; exposes res.id once read back.
+  chatAdapter
+
+  // The chat-UI container, wired by resolvables: MODEL <- the adapter's id
+  // (late-bound; flows through the compose `variables` field into the project
+  // env, where ${MODEL} interpolates). VLLM_HOST is a literal pointing the
+  // container back at the host's fake vLLM (host-gateway). No env bridge.
+  new compose.Stack {
+    label = "chat-ui"
+    target = new formae.TargetResolvable { label = "docker" }
+    projectName = "vllm-local-chat-ui"
+    variables {
+      ["MODEL"] = chatAdapter.res.id
+      ["VLLM_HOST"] = "host.docker.internal"
+    }
+    composeFile = """
+      services:
+        chat-ui:
+          image: formae-chat-ui:demo
+          environment:
+            VLLM_BASE_URL: "http://${VLLM_HOST}:8077"
+            MODEL: "${MODEL}"
+          ports:
+            - "8088:8080"
+          extra_hosts:
+            - "host.docker.internal:host-gateway"
+      """
+  }
+}
