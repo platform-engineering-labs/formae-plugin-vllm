@@ -30,12 +30,16 @@ adapters_on() { curl -fsS "http://$1:8000/v1/models" 2>/dev/null | python3 -c "i
 
 teardown() {
   log "Tearing down fleet + infra..."
+  # App stack first (best-effort): unload adapters + stop the chat-UI while the
+  # vLLM nodes are still reachable.
   ( cd "$EX" && "$FORMAE" destroy --yes fleet.pkl ) >/tmp/e2e-fleet-d1.log 2>&1 || true
-  ( cd "$EX" && "$FORMAE" destroy --yes fleet-infra.pkl ) >/tmp/e2e-fleet-d2.log 2>&1 || true
-  # Backstop: terminate any instance formae's destroy missed (catches an apply
-  # that was interrupted before formae recorded the instance). Same tag sweep
-  # as the standalone backup script. Billable GPUs — never leak.
+  # COST-SAFETY, immediately: terminate the billable GPU instances by tag before
+  # the (blocking) infra destroy, so a GPU box can never leak even if the infra
+  # destroy stalls. Same tag sweep as the standalone backup script.
   bash "$ROOT/scripts/force-terminate-fleet.sh" || true
+  # Now clean the network in order. --watch so it completes (instances are gone,
+  # their ENIs released) before we exit, rather than racing the VPC delete.
+  ( cd "$EX" && "$FORMAE" destroy --watch --yes fleet-infra.pkl ) >/tmp/e2e-fleet-d2.log 2>&1 || true
   # Print the proof that nothing is left (formae inventory + AWS ground truth).
   bash "$ROOT/scripts/fleet-status.sh" || true
 }
