@@ -50,11 +50,19 @@ ensure_vllm() {
 }
 
 log "Provisioning fleet infra..."
-( cd "$EX" && "$FORMAE" apply --mode reconcile --watch --yes fleet-infra.pkl )
+infra_out=$( cd "$EX" && "$FORMAE" apply --mode reconcile --watch --yes fleet-infra.pkl 2>&1 )
+printf '%s\n' "$infra_out" | sed -E 's/\x1b\[[0-9;]*m//g' | tail -4
+# `apply --watch` exits 0 even when the command FAILED (e.g. an instance hit
+# InsufficientInstanceCapacity). Detect a failed apply and bail fast rather than
+# polling 900s for IPs that will never arrive. The trap then tears down; run
+# `formae status command` for the per-resource failure reason.
+if printf '%s' "$infra_out" | grep -qE '\bFailed\b'; then
+  log "FAIL: infra apply reported Failed (e.g. instance capacity in an AZ) — inspect with '$FORMAE status command'"
+  exit 1
+fi
 
-# apply is async: poll formae's inventory until both instances exist and their
-# public IPs have been read back, before waiting on vLLM. (Reading the IPs
-# immediately after apply returns empty — the command is still in flight.)
+# instances provision asynchronously: poll inventory until both public IPs are
+# read back before waiting on vLLM.
 log "Waiting for both nodes to be provisioned with public IPs..."
 ip_deadline=$((SECONDS+900))
 while :; do
