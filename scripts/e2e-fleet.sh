@@ -50,8 +50,19 @@ ensure_vllm() {
 }
 
 log "Provisioning fleet infra..."
-( cd "$EX" && "$FORMAE" apply --mode reconcile --yes fleet-infra.pkl )
-IP_A=$(node_ip a); IP_B=$(node_ip b)
+( cd "$EX" && "$FORMAE" apply --mode reconcile --watch --yes fleet-infra.pkl )
+
+# apply is async: poll formae's inventory until both instances exist and their
+# public IPs have been read back, before waiting on vLLM. (Reading the IPs
+# immediately after apply returns empty — the command is still in flight.)
+log "Waiting for both nodes to be provisioned with public IPs..."
+ip_deadline=$((SECONDS+900))
+while :; do
+  IP_A=$(node_ip a); IP_B=$(node_ip b)
+  [ -n "$IP_A" ] && [ -n "$IP_B" ] && break
+  [ $SECONDS -ge "$ip_deadline" ] && { log "FAIL: nodes did not get public IPs within 900s (infra apply stuck?)"; exit 1; }
+  sleep 10
+done
 log "nodes: A=$IP_A B=$IP_B"
 for ip in "$IP_A" "$IP_B"; do ensure_vllm "$ip"; done
 
@@ -63,7 +74,7 @@ log "Building chat-UI image..."
 docker build -q -t formae-chat-ui:demo "$EX/chat-ui" >/dev/null
 
 log "Applying fleet.pkl (adapters + chat-UI, wired by resolvables)..."
-( cd "$EX" && "$FORMAE" apply --mode reconcile --yes fleet.pkl )
+( cd "$EX" && "$FORMAE" apply --mode reconcile --watch --yes fleet.pkl )
 
 for ip in "$IP_A" "$IP_B"; do
   got=$(adapters_on "$ip")
@@ -104,7 +115,7 @@ if [ "$HANDS_OFF" = "1" ]; then
   log "Auto-reconcile restored node B hands-off."
 else
   log "Restoring node B via re-apply (stable-formae path)..."
-  ( cd "$EX" && "$FORMAE" apply --mode reconcile --yes fleet.pkl )
+  ( cd "$EX" && "$FORMAE" apply --mode reconcile --watch --yes fleet.pkl )
 fi
 got=$(adapters_on "$IP_B")
 echo "$got" | grep -q chat && echo "$got" | grep -q jailbreak-detector || { log "FAIL: node B not restored"; exit 1; }
