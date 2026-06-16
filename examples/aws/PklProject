@@ -8,4 +8,9 @@ dependencies {
   ["aws"] {
     uri = "package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@0.1.11"
   }
+  ["compose"] {
+    // Dev releases publish their PKL schema WITHOUT the -dev suffix:
+    // the 0.1.3-dev.0 tag publishes its schema as compose@0.1.3.
+    uri = "package://hub.platform.engineering/plugins/compose/schema/pkl/compose/compose@0.1.3"
+  }
 }
