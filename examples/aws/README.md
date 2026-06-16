@@ -22,7 +22,7 @@ only; LoRA adapters are loaded at runtime and are **ephemeral** — they are los
 when the container restarts. This means a node that reboots (or whose container
 is recreated) silently reverts to base-only. Formae detects this drift on the
 next sync and restores the declared adapter set, either on the next manual apply
-or hands-off with PLA-5 (#512).
+or hands-off on the 30-second auto-reconcile beat (included in formae >= 0.86.1).
 
 ---
 
@@ -33,14 +33,58 @@ or hands-off with PLA-5 (#512).
   default needs 8** (the typical fresh-account limit). The **3-node demo needs
   >= 12** — request a Service Quota increase (`L-DB2E81BA`, region us-east-1)
   first, then add `node-c` as noted above.
-- `formae` CLI installed and authenticated (`formae version`).
+- `formae` CLI installed and authenticated (`formae version`). **Hands-off
+  auto-reconcile is included in stable formae >= 0.86.1** — no special binary
+  needed. If you must run an older binary, set `FORMAE_BINARY=/path/to/binary`
+  before running the e2e script; the auto-reconcile beat will be skipped and the
+  manual re-apply path is used instead.
 - AWS resource plugin: `formae plugin install aws`.
 - vLLM plugin already bundled in this repository (`formae plugin install ./`
   from the repo root if running from source).
-- **Hands-off auto-reconcile beat only:** a `formae` binary built from `main`
-  that includes PLA-5 (#512). Set `FORMAE_BINARY=/path/to/main/formae` before
-  running. On the current stable release the auto-reconcile beat is skipped and
-  the manual re-apply path is used instead.
+- **Docker running locally** for the chat-UI container.
+- **Chat-UI image built locally:**
+  ```bash
+  docker build -t formae-chat-ui:demo examples/aws/chat-ui
+  ```
+
+---
+
+## Infrastructure graph (AWS → vLLM → ChatUI)
+
+The fleet is a single formae **infrastructure graph** across three plugins. Two
+stacks carry different lifecycle policies:
+
+- **`vllm-fleet-infra`** (`fleet-infra.pkl`): VPC + 2× `g4dn.xlarge` instances
+  running vLLM. Carries a `TTLPolicy { ttl = 4.h; onDependents = "cascade" }`
+  that auto-destroys the billable GPU boxes after the demo window. No
+  auto-reconcile on this stack.
+- **`vllm-fleet`** (`fleet.pkl`): vLLM targets, LoRA adapters, and a
+  `compose.Stack` chat-UI. Carries `AutoReconcilePolicy { interval = 30.s }` —
+  this stack self-heals continuously.
+
+Every cross-stack edge is a formae **resolvable** resolved at apply time — no
+environment variables, no manually copied values:
+
+- Each vLLM target's `host` resolves from its AWS instance's `PublicIp`
+  (cross-stack reference into `vllm-fleet-infra`).
+- The chat-UI container's `VLLM_HOST` resolves from node-a's instance `PublicIp`,
+  and its `MODEL` resolves from node-a's `chat` adapter's `res.id`.
+
+```
+AWS::EC2::Instance ──PublicIp──► vLLM Target.host ──► VLLM::Inference::LoRAAdapter
+        │                                                      │
+        │ PublicIp (VLLM_HOST)                          .res.id (MODEL)
+        ▼                                                      ▼
+                   DOCKER::Compose::Stack  (the chat-UI container, :8088)
+```
+
+Open `http://localhost:8088` to chat; the page shows the resolved wiring
+(endpoint + model in use).
+
+**Policies are stack-scoped:** the app stack (`vllm-fleet`) self-heals via
+auto-reconcile; the infra stack (`vllm-fleet-infra`) is cost-safe via TTL —
+the GPU boxes are destroyed automatically after 4 hours regardless of whether you
+remember to run `formae destroy`.
 
 ---
 
@@ -52,13 +96,19 @@ bash scripts/e2e-fleet.sh
 
 Provisions infra, declares adapters, verifies convergence, drops node B's
 adapters to show drift, restores via re-apply, then destroys everything.
-Teardown is guaranteed via `trap`. **This is billable** — 3x g4dn.xlarge at
-~$0.526/hr each ~= $1.6/hr total.
+Teardown is guaranteed via `trap`. **This is billable** — 2x g4dn.xlarge at
+~$0.526/hr each ~= $1.05/hr total.
 
-Hands-off auto-reconcile variant (requires formae with PLA-5 #512):
+Hands-off auto-reconcile variant (formae >= 0.86.1, included in stable):
 
 ```bash
-HANDS_OFF=1 FORMAE_BINARY=/path/to/main/formae bash scripts/e2e-fleet.sh
+HANDS_OFF=1 bash scripts/e2e-fleet.sh
+```
+
+For older binaries, point to a newer build:
+
+```bash
+HANDS_OFF=1 FORMAE_BINARY=/path/to/newer/formae bash scripts/e2e-fleet.sh
 ```
 
 Instead of re-applying, the script waits up to 180 s for the 30 s auto-reconcile
@@ -71,24 +121,24 @@ policy in `fleet.pkl` to restore node B without any user action.
 ```bash
 cd examples/aws && pkl project resolve
 
-# Step 1 — provision the 3 GPU boxes (billable)
+# Build the chat-UI image (needed before applying fleet.pkl)
+docker build -t formae-chat-ui:demo chat-ui
+
+# Step 1 — provision the GPU boxes (billable)
 formae apply --mode reconcile --yes fleet-infra.pkl
+# Wait for vLLM to be serving on the nodes (a few minutes for image pull + model load)
 
-# Step 2 — capture the public IPs
-aws ec2 describe-instances --region us-east-1 \
-  --filters "Name=tag:Name,Values=vllm-node-a" "Name=instance-state-name,Values=running" \
-  --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
-
-# (repeat for vllm-node-b)
-
-export VLLM_URL_A=http://<ip-a>:8000
-export VLLM_URL_B=http://<ip-b>:8000
-
-# Step 3 — converge the adapter set on both nodes
+# Step 2 — converge the adapter set, wire the chat-UI
+# No VLLM_URL_* exports needed — vLLM targets resolve their host from the
+# infra instances via cross-stack resolvables; the chat-UI env is wired the same way.
 formae apply --mode reconcile --yes fleet.pkl
 
-# Step 4 — verify: should show 4 managed LoRAAdapter resources (2 adapters x 2 nodes)
+# Step 3 — verify: should show 4 managed LoRAAdapter resources (2 adapters x 2 nodes)
+# and 1 DOCKER::Compose::Stack (the chat-ui)
 formae inventory
+
+# Open the chat UI
+open http://localhost:8088
 ```
 
 ---
@@ -138,15 +188,15 @@ aws ssm send-command \
   --instance-ids <instance-id>
 ```
 
-**Restore on stable formae** (manual re-apply):
+**Restore on formae >= 0.86.1** (hands-off): do nothing. The 30 s
+auto-reconcile policy declared in `fleet.pkl` triggers within two beats and
+re-loads both adapters without any user action.
+
+**Restore manually** (any formae version):
 
 ```bash
 formae apply --mode reconcile --yes fleet.pkl
 ```
-
-**Restore hands-off (formae with PLA-5 #512):** do nothing. The 30 s
-auto-reconcile policy declared in `fleet.pkl` triggers within two beats and
-re-loads both adapters without any user action.
 
 ---
 
@@ -162,8 +212,8 @@ formae apply --mode reconcile --yes fleet.pkl
 The two reachable nodes converge as expected. The offline node reports
 `unreachable` (`NetworkFailure`), is retried, but is **not tombstoned** — an
 unreachable node is not the same as a deleted resource. When the instance comes
-back up, a re-apply (or the auto-reconcile beat with #512) restores its adapter
-set.
+back up, a re-apply (or the auto-reconcile beat on formae >= 0.86.1) restores
+its adapter set.
 
 ---
 
@@ -176,20 +226,30 @@ never successfully loaded an adapter (or whose record was stale) would not be
 re-asserted. After the fix, the reconciler reads from `resource_updates` (the
 user's declared intent), so any node whose current observed state diverges from
 the declared set is re-driven to convergence on every beat, without requiring a
-manual `formae apply`.
+manual `formae apply`. This is included in stable formae >= 0.86.1.
 
 ---
 
 ## Teardown
+
+> **Destroy order + caveats.** Destroy the app stack (`fleet.pkl`) before the
+> infra stack. The app stack has an `AutoReconcilePolicy` — until PLA-15 is
+> fixed, destroying it may resurrect the adapters/UI on the next beat; remove
+> the policy or stop the agent first. The infra stack's `TTLPolicy` auto-destroys
+> the GPU boxes after 4h regardless (cost-safe). Cross-stack target cleanup when
+> the infra TTL fires is a known gap (PLA-19), and auto-reconcile does not
+> refresh a vLLM target's host if an instance is replaced and gets a new IP
+> (PLA-20) — re-apply the app stack in that case.
 
 ```bash
 formae destroy --yes fleet.pkl
 formae destroy --yes fleet-infra.pkl
 ```
 
-Cost reminder: 3x g4dn.xlarge ~= **$1.6/hr** — destroy as soon as you are done.
-The `e2e-fleet.sh` script destroys automatically via `trap EXIT`, but manual
-steps do not. Double-check with:
+Cost reminder: 2x g4dn.xlarge ~= **$1.05/hr** — destroy as soon as you are
+done, or rely on the `TTLPolicy` (4h hard cap on the infra stack). The
+`e2e-fleet.sh` script destroys automatically via `trap EXIT`, but manual steps
+do not. Double-check with:
 
 ```bash
 aws ec2 describe-instances --region us-east-1 \
