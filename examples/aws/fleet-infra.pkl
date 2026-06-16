@@ -56,6 +56,12 @@ forma {
   new formae.Stack {
     label = "vllm-fleet-infra"
     description = "3 GPU EC2 boxes running vLLM for the fleet demo"
+    // Cost-safety: auto-destroy the billable GPU boxes after the demo window.
+    // No auto-reconcile here — infra is not self-healed (see fleet.pkl for the
+    // app stack's AutoReconcilePolicy). Stack-scoped policies don't leak across.
+    policies {
+      new formae.TTLPolicy { label = "infra-ttl"; ttl = 4.h; onDependents = "cascade" }
+    }
   }
 
   new formae.Target {
