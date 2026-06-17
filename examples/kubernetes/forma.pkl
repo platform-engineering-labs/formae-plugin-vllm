@@ -22,15 +22,10 @@ forma {
 
   new formae.Target {
     label = "k8s-vllm"
-    namespace = "VLLM"
-    config = new Mapping {
-      ["Type"] = "vllm"
-      // In-cluster DNS name of the vLLM Service (default namespace).
-      // For out-of-cluster access, run:
-      //   kubectl port-forward svc/vllm 8000:8000
-      // and use "http://localhost:8000" instead.
-      ["BaseUrl"] = "http://vllm.default.svc.cluster.local:8000"
-    }
+    // In-cluster DNS name of the vLLM Service (default namespace). For
+    // out-of-cluster access, `kubectl port-forward svc/vllm 8000:8000` and set
+    // baseUrl = "http://localhost:8000".
+    config = new vllm.Config { baseUrl = "http://vllm.default.svc.cluster.local:8000" }
   }
 
   new vllm.LoRAAdapter {
