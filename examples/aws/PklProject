@@ -1,7 +1,9 @@
 amends "pkl:Project"
 
 dependencies {
-  ["vllm"] = import("../../schema/pkl/PklProject")
+  ["vllm"] {
+    uri = "package://hub.platform.engineering/plugins/vllm/schema/pkl/vllm/vllm@0.1.0"
+  }
   ["formae"] {
     uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.86.0"
   }

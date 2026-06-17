@@ -1,9 +1,9 @@
 amends "pkl:Project"
 
 dependencies {
-  // Reference local plugin schema during development
-  // IMPORTANT: The alias must match the package name from the schema's PklProject
-  ["vllm"] = import("../../schema/pkl/PklProject")
+  ["vllm"] {
+    uri = "package://hub.platform.engineering/plugins/vllm/schema/pkl/vllm/vllm@0.1.0"
+  }
 
   // Formae schema - fetched from public registry
   ["formae"] {
