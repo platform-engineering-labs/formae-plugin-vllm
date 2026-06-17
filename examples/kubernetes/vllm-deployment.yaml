@@ -22,13 +22,13 @@ spec:
     spec:
       containers:
         - name: vllm
-          image: vllm/vllm-openai:latest
+          image: vllm/vllm-openai:v0.22.1
           args:
             - "--model"
             - "Qwen/Qwen2.5-0.5B-Instruct"
             - "--enable-lora"
             - "--max-lora-rank"
-            - "32"
+            - "64"
           env:
             # Required so /v1/load_lora_adapter and /v1/unload_lora_adapter work.
             - name: VLLM_ALLOW_RUNTIME_LORA_UPDATING

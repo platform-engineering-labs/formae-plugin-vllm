@@ -35,7 +35,7 @@ no resource-model change.
 
 3. **Point the forma target at the Service.** In-cluster, the forma already uses
    `http://vllm.default.svc.cluster.local:8000`. To run formae from outside the
-   cluster, port-forward and edit the target `BaseUrl` to `http://localhost:8000`:
+   cluster, port-forward and set the target's `baseUrl` to `http://localhost:8000`:
 
    ```bash
    kubectl port-forward svc/vllm 8000:8000
