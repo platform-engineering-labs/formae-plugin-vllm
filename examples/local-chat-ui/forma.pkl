@@ -1,17 +1,17 @@
 /*
- * Local, GPU-free infra-graph: fake vLLM -> LoRA adapter -> chat-UI, every edge
- * a formae resolvable. Proves the same wiring as the AWS fleet demo without a
- * GPU or any cloud: the chat-UI container's MODEL is wired from the adapter's
- * read-back id, resolved late at apply time and injected as a compose variable.
+ * Local chat-UI demo — no GPU, no cloud. Runs the same vLLM + chat-UI wiring as
+ * the AWS fleet demo entirely on your machine, against a stand-in (fake) vLLM:
+ * the chat-UI container's MODEL is wired from the adapter's read-back id and the
+ * vLLM endpoint from the target host, resolved at apply time and injected into
+ * the container — no values copied by hand.
  *
  * Prereqs (see README.md):
  *   - a fake vLLM running on the host:  FAKE_VLLM_ADDR=:8077 go run ./cmd/fake-vllm
  *   - the chat-UI image built locally:  docker build -t formae-chat-ui:demo examples/aws/chat-ui
  *
- * Apply (agent must run with FORMAE_PEL_ROOT=$HOME/.pel so the local plugin
- * builds are used):
- *   formae apply --mode reconcile --simulate examples/local-graph/forma.pkl
- *   formae apply --mode reconcile          examples/local-graph/forma.pkl
+ * Apply:
+ *   formae apply --mode reconcile --simulate examples/local-chat-ui/forma.pkl
+ *   formae apply --mode reconcile          examples/local-chat-ui/forma.pkl
  * Then open http://localhost:8088 and chat. Teardown: formae destroy.
  */
 amends "@formae/forma.pkl"
@@ -32,8 +32,8 @@ local chatAdapter = new vllm.LoRAAdapter {
 
 forma {
   new formae.Stack {
-    label = "vllm-local-graph"
-    description = "Local infra-graph: fake vLLM adapter wired into a chat-UI container"
+    label = "local-chat-ui"
+    description = "Local chat-UI demo: a fake vLLM adapter wired into a chat-UI container"
   }
 
   // vLLM target -> the host's fake vLLM. Host/Port build the BaseURL
@@ -46,7 +46,6 @@ forma {
   // Local Docker target for the chat-UI.
   new formae.Target {
     label = "docker"
-    namespace = "DOCKER"
     config = new compose.Config {}
   }
 

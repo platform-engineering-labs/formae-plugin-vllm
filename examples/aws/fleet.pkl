@@ -56,7 +56,6 @@ forma {
   // Local Docker target for the chat UI.
   new formae.Target {
     label = "docker"
-    namespace = "DOCKER"
     config = new compose.Config {}
   }
 
