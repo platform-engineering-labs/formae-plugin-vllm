@@ -36,3 +36,6 @@ schema/pkl/VERSION
 # Claude Code
 CLAUDE.md
 .claude/
+
+# Internal sales-demo presenter runbook (not for the OSS repo)
+examples/aws/DEMO.md
