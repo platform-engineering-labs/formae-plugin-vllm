@@ -24,8 +24,9 @@ description = "Manage vLLM LoRA adapters and discover served models"
 // Common values: "cloud", "network", "config", "observability", "auth", "other"
 category = "other"
 
-// SPDX license identifier (must be one of: Apache-2.0, BSD-3-Clause, MIT, MPL-2.0 for Hub publishability).
-license = "Apache-2.0"
+// SPDX license identifier. platform.engineering plugins ship FSL-1.1-ALv2; the
+// LICENSE file body must be the canonical FSL text (the Hub matches it).
+license = "FSL-1.1-ALv2"
 
 // Minimum compatible formae agent version. Pinned manually to 0.86.0: this plugin
 // targets the current stable agent. (The SDK's own MinFormaeVersion floor is still
