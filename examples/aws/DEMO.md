@@ -32,10 +32,6 @@ This is the exact, validated sequence (the agent came up clean with aws+vllm).
 > export FORMAE_PEL_ROOT=$HOME/.pel
 > export AWS_REGION=us-east-1
 > ```
-> Notes that bit us during setup, so don't re-discover them live:
-> - `formae plugin list` does **not** work here (`~/.pel` isn't a full orbital
->   tree; the stable binary would sudo into `/opt/pel`). Verify the agent via the
->   simulate in 0.4 instead.
 
 ```bash
 # 0.1 — stop any running agent (frees port 49684), start fresh
@@ -148,22 +144,56 @@ $ cat fleet.pkl            # vLLM targets + LoRA adapters + compose.Stack chat-U
                            # AutoReconcilePolicy { interval = 30.s }
 ```
 
-**[say]** "Each vLLM target has no hard-coded IP. Its `host` is a cross-stack
-resolvable:
+**[say]** "Each vLLM target has no hard-coded IP. Its `host` is a typed
+cross-stack handle to the AWS instance — `node(\"a\").publicIp` — which formae
+reads back at apply time. The chat-UI's `variables` field does the same for
+`VLLM_HOST` and for `MODEL` (the chat adapter's `.res.id`). Formae resolves all
+of these when you apply `fleet.pkl`."
 
-```
-{ label=\"vllm-node-a\"; type=\"AWS::EC2::Instance\"; stack=\"vllm-fleet-infra\"; property=\"PublicIp\" }
-```
+```mermaid
+%%{init: {'theme':'default','themeVariables':{'edgeLabelBackground':'#ffffff'}}}%%
+flowchart TD
+  awsT("target: aws"):::target
 
-The chat-UI's `variables` field does the same for `VLLM_HOST` and `MODEL`.
-Formae resolves all of these when you apply `fleet.pkl`."
+  subgraph infra["stack: vllm-fleet-infra · TTL 4h"]
+    vpc("vllm-fleet-vpc · VPC"):::res
+    subA("subnet-a · Subnet (us-east-1b)"):::res
+    subB("subnet-b · Subnet (us-east-1c)"):::res
+    sg("vllm-fleet-sg · Security Group"):::res
+    nodeA("vllm-node-a · EC2 Instance"):::res
+    nodeB("vllm-node-b · EC2 Instance"):::res
+  end
 
-```
-AWS::EC2::Instance ──PublicIp──► vLLM Target.host ──► VLLM::Inference::LoRAAdapter
-        │                                                      │
-        │ PublicIp (VLLM_HOST)                          .res.id (MODEL)
-        ▼                                                      ▼
-                   DOCKER::Compose::Stack  (the chat-UI container, :8088)
+  awsT -.->|hosts| vpc
+  vpc --> subA & subB & sg
+  subA --> nodeA
+  subB --> nodeB
+  sg --> nodeA & nodeB
+
+  nodeAtgt("target: node-a (VLLM)"):::target
+  nodeBtgt("target: node-b (VLLM)"):::target
+  dockerT("target: docker"):::target
+
+  nodeA -->|"node(&quot;a&quot;).publicIp"| nodeAtgt
+  nodeB -->|"node(&quot;b&quot;).publicIp"| nodeBtgt
+
+  subgraph app["stack: vllm-fleet · auto-reconcile 30s"]
+    aChat("node-a-chat · LoRAAdapter"):::res
+    aJbd("node-a-jailbreak-detector · LoRAAdapter"):::res
+    bChat("node-b-chat · LoRAAdapter"):::res
+    bJbd("node-b-jailbreak-detector · LoRAAdapter"):::res
+    chatui("chat-ui · Compose Stack :8088"):::res
+  end
+
+  nodeAtgt -.->|hosts| aChat & aJbd
+  nodeBtgt -.->|hosts| bChat & bJbd
+  dockerT -.->|hosts| chatui
+
+  aChat -->|"chatAdapter.res.id → MODEL"| chatui
+  nodeA -->|"node(&quot;a&quot;).publicIp → VLLM_HOST"| chatui
+
+  classDef target fill:#ede7ff,stroke:#9a7cf0,color:#4b2db5
+  classDef res fill:#dbf5ea,stroke:#3cba8b,color:#15604a
 ```
 
 **[say]** "Policies are stack-scoped. The app stack self-heals every 30 s. The
@@ -243,11 +273,42 @@ $ for i in $(seq 1 12); do curl -s "http://$NODE_B_IP:8000/v1/models" | python3 
 ```
 
 **[expect]** node B goes from `[]` back to `['chat','jailbreak-detector']` with no
-user action — the agent re-asserted the declared intent from `resource_updates`.
+user action — the agent re-asserted the declared intent automatically.
 **[capture]**
 
 > Fallback (only if running formae < 0.86.1): `formae apply --mode reconcile
-> --yes fleet.pkl` restores it manually. Call this out as the "without #512" path.
+> --yes fleet.pkl` restores it manually (the manual-reconcile path).
+
+---
+
+## Beat 6b — Survives a full node reboot ★
+
+**[say]** "That was an out-of-band unload. The real-world version is a node
+reboot — the box comes back, the vLLM container restarts, and the runtime-loaded
+adapters are gone. Same drift, more visceral. I'll reboot node B and, again, do
+nothing to restore it."
+
+```bash
+# Reboot node B (soft reboot — the public IP is preserved, so NODE_B_IP stays valid)
+$ NODE_B_ID=$(formae inventory resources --query 'type:AWS::EC2::Instance label:vllm-node-b' --output-consumer machine --output-schema json | python3 -c "import sys,json;r=json.load(sys.stdin)['Resources'][0];p={**r.get('Properties',{}),**r.get('ReadOnlyProperties',{})};print(p.get('InstanceId',''))")
+$ aws ec2 reboot-instances --region "$AWS_REGION" --instance-ids "$NODE_B_ID"
+
+# Wait for vLLM to come back (container auto-restarts via `--restart unless-stopped`),
+# now base-only:
+$ until curl -fsS "http://$NODE_B_IP:8000/v1/models" >/dev/null 2>&1; do echo waiting...; sleep 15; done
+$ curl -s "http://$NODE_B_IP:8000/v1/models" | python3 -c "import sys,json;print('node B adapters after reboot:',sorted(m['id'] for m in json.load(sys.stdin)['data'] if m.get('parent')))"
+```
+
+**[say]** "Base-only again — the reboot wiped the runtime adapters. Watch it heal,
+hands-off."
+
+```bash
+$ for i in $(seq 1 18); do curl -s "http://$NODE_B_IP:8000/v1/models" | python3 -c "import sys,json;print(sorted(m['id'] for m in json.load(sys.stdin)['data'] if m.get('parent')))"; sleep 10; done
+```
+
+**[expect]** once the box is back and the auto-reconcile beat detects the drift,
+node B returns to `['chat','jailbreak-detector']` with no user action.
+**[capture]**
 
 ---
 
@@ -268,17 +329,16 @@ $ formae apply --mode reconcile --yes fleet.pkl     # node A converges; node B =
 ## Beat 8 — Destroy + prove it's gone
 
 **[say]** "Destroy app stack first, then infra. The app stack has a 30-second
-auto-reconcile policy — until PLA-15 is fixed, if the agent is still running it
-may resurrect adapters and the chat UI on the next beat. To be safe: remove the
-policy or stop the agent before destroying the app stack."
+auto-reconcile policy, so if the agent is still running it may resurrect adapters
+and the chat UI on the next beat. To be safe: remove the policy or stop the agent
+before destroying the app stack."
 
 > **Destroy order + caveats.** Destroy `fleet.pkl` (app) before `fleet-infra.pkl`
 > (infra). The app stack's `AutoReconcilePolicy` can resurrect adapters/UI on the
-> next beat until PLA-15 is fixed — remove the policy or stop the agent first. The
+> next beat while the agent runs — remove the policy or stop the agent first. The
 > infra stack's `TTLPolicy` auto-destroys GPU boxes after 4h regardless (cost-safe).
-> Cross-stack target cleanup when the TTL fires is a known gap (PLA-19). If an
-> instance is replaced and gets a new IP, auto-reconcile will not refresh the vLLM
-> target's host (PLA-20) — re-apply the app stack in that case.
+> If an instance is replaced and comes back with a new public IP, re-apply the app
+> stack so the vLLM targets pick up the new host.
 
 ```bash
 $ formae destroy --yes fleet.pkl

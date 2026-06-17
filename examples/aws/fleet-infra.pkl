@@ -1,9 +1,9 @@
 /*
- * Fleet infra: 3 GPU EC2 boxes running vLLM (Qwen2.5-0.5B-Instruct), each with
- * two real LoRA adapters baked to local disk. Phase 1 of the fleet demo; apply
- * this, then point examples/aws/fleet.pkl at the 3 public IPs.
+ * Fleet infra: GPU EC2 boxes running vLLM (Qwen2.5-0.5B-Instruct), each with two
+ * real LoRA adapters staged to local disk. Phase 1 of the fleet demo — apply this
+ * first; fleet.pkl then resolves each node's host from these instances.
  *
- * Billable: 3x g4dn.xlarge. Apply with explicit go-ahead; destroy when done.
+ * Billable: g4dn.xlarge per node. Apply with explicit go-ahead; destroy when done.
  */
 amends "@formae/forma.pkl"
 
@@ -32,9 +32,7 @@ properties {
 local nodeLabels = List("a", "b")
 
 // Each node gets its own public subnet in a DISTINCT AZ. Spreading across AZs
-// avoids failing the whole fleet when one AZ is short on g4dn capacity (observed:
-// InsufficientInstanceCapacity for g4dn.xlarge in us-east-1a — node-b got the
-// last unit, node-a's create failed and took down the apply).
+// keeps the fleet from failing when a single AZ is short on g4dn capacity.
 local nodeAz = new Mapping<String, String> { ["a"] = "us-east-1b"; ["b"] = "us-east-1c" }
 local nodeCidr = new Mapping<String, String> { ["a"] = "10.43.1.0/24"; ["b"] = "10.43.2.0/24" }
 
@@ -61,7 +59,7 @@ local userDataScript = """
 forma {
   new formae.Stack {
     label = "vllm-fleet-infra"
-    description = "3 GPU EC2 boxes running vLLM for the fleet demo"
+    description = "GPU EC2 boxes running vLLM for the fleet demo"
     // Cost-safety: auto-destroy the billable GPU boxes after the demo window.
     // No auto-reconcile here — infra is not self-healed (see fleet.pkl for the
     // app stack's AutoReconcilePolicy). Stack-scoped policies don't leak across.

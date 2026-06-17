@@ -70,12 +70,50 @@ environment variables, no manually copied values:
 - The chat-UI container's `VLLM_HOST` resolves from node-a's instance `PublicIp`,
   and its `MODEL` resolves from node-a's `chat` adapter's `res.id`.
 
-```
-AWS::EC2::Instance ──PublicIp──► vLLM Target.host ──► VLLM::Inference::LoRAAdapter
-        │                                                      │
-        │ PublicIp (VLLM_HOST)                          .res.id (MODEL)
-        ▼                                                      ▼
-                   DOCKER::Compose::Stack  (the chat-UI container, :8088)
+```mermaid
+%%{init: {'theme':'default','themeVariables':{'edgeLabelBackground':'#ffffff'}}}%%
+flowchart TD
+  awsT("target: aws"):::target
+
+  subgraph infra["stack: vllm-fleet-infra · TTL 4h"]
+    vpc("vllm-fleet-vpc · VPC"):::res
+    subA("subnet-a · Subnet (us-east-1b)"):::res
+    subB("subnet-b · Subnet (us-east-1c)"):::res
+    sg("vllm-fleet-sg · Security Group"):::res
+    nodeA("vllm-node-a · EC2 Instance"):::res
+    nodeB("vllm-node-b · EC2 Instance"):::res
+  end
+
+  awsT -.->|hosts| vpc
+  vpc --> subA & subB & sg
+  subA --> nodeA
+  subB --> nodeB
+  sg --> nodeA & nodeB
+
+  nodeAtgt("target: node-a (VLLM)"):::target
+  nodeBtgt("target: node-b (VLLM)"):::target
+  dockerT("target: docker"):::target
+
+  nodeA -->|"node(&quot;a&quot;).publicIp"| nodeAtgt
+  nodeB -->|"node(&quot;b&quot;).publicIp"| nodeBtgt
+
+  subgraph app["stack: vllm-fleet · auto-reconcile 30s"]
+    aChat("node-a-chat · LoRAAdapter"):::res
+    aJbd("node-a-jailbreak-detector · LoRAAdapter"):::res
+    bChat("node-b-chat · LoRAAdapter"):::res
+    bJbd("node-b-jailbreak-detector · LoRAAdapter"):::res
+    chatui("chat-ui · Compose Stack :8088"):::res
+  end
+
+  nodeAtgt -.->|hosts| aChat & aJbd
+  nodeBtgt -.->|hosts| bChat & bJbd
+  dockerT -.->|hosts| chatui
+
+  aChat -->|"chatAdapter.res.id → MODEL"| chatui
+  nodeA -->|"node(&quot;a&quot;).publicIp → VLLM_HOST"| chatui
+
+  classDef target fill:#ede7ff,stroke:#9a7cf0,color:#4b2db5
+  classDef res fill:#dbf5ea,stroke:#3cba8b,color:#15604a
 ```
 
 Open `http://localhost:8088` to chat; the page shows the resolved wiring
@@ -217,29 +255,15 @@ its adapter set.
 
 ---
 
-## Why this works — auto-reconcile (PLA-5 #512)
-
-PLA-5 changes where the auto-reconcile beat sources desired state. Before the
-fix, the reconciler read from the `resources` table, which only contains records
-for resources that were successfully applied at least once — so a node that had
-never successfully loaded an adapter (or whose record was stale) would not be
-re-asserted. After the fix, the reconciler reads from `resource_updates` (the
-user's declared intent), so any node whose current observed state diverges from
-the declared set is re-driven to convergence on every beat, without requiring a
-manual `formae apply`. This is included in stable formae >= 0.86.1.
-
----
-
 ## Teardown
 
 > **Destroy order + caveats.** Destroy the app stack (`fleet.pkl`) before the
-> infra stack. The app stack has an `AutoReconcilePolicy` — until PLA-15 is
-> fixed, destroying it may resurrect the adapters/UI on the next beat; remove
-> the policy or stop the agent first. The infra stack's `TTLPolicy` auto-destroys
-> the GPU boxes after 4h regardless (cost-safe). Cross-stack target cleanup when
-> the infra TTL fires is a known gap (PLA-19), and auto-reconcile does not
-> refresh a vLLM target's host if an instance is replaced and gets a new IP
-> (PLA-20) — re-apply the app stack in that case.
+> infra stack. The app stack has an `AutoReconcilePolicy`, so destroying it
+> while the agent is running may resurrect the adapters/UI on the next beat —
+> remove the policy or stop the agent first. The infra stack's `TTLPolicy`
+> auto-destroys the GPU boxes after 4h regardless (cost-safe). If an instance is
+> replaced and comes back with a new public IP, re-apply the app stack so the
+> vLLM targets pick up the new host.
 
 ```bash
 formae destroy --yes fleet.pkl
