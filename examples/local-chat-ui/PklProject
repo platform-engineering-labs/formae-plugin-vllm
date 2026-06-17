@@ -1,0 +1,14 @@
+amends "pkl:Project"
+
+// Portable local example: the vLLM schema is imported from this repo; the
+// compose schema comes from the published package (>= 0.1.3, which added the
+// resolvable `variables` field this example uses).
+dependencies {
+  ["vllm"] = import("../../schema/pkl/PklProject")
+  ["compose"] {
+    uri = "package://hub.platform.engineering/plugins/compose/schema/pkl/compose/compose@0.1.3"
+  }
+  ["formae"] {
+    uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.86.0"
+  }
+}

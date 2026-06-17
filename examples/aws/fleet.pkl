@@ -1,0 +1,113 @@
+/*
+ * Fleet app layer: declare the LoRA-adapter set for the vLLM nodes, plus a local
+ * chat-UI wired to node-a. The vLLM targets resolve their host from the AWS
+ * instances in the vllm-fleet-infra stack (no env bridge) — one graph across
+ * the AWS, vLLM, and compose plugins. Apply AFTER fleet-infra.pkl is up.
+ *
+ * The stack has an auto-reconcile policy: with a formae build including PLA-5
+ * (#512, in formae >= 0.86.1), a node that restarts/loses its adapters heals
+ * hands-off. See README for the PLA-15 teardown caveat.
+ */
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@vllm/core/vllm.pkl"
+import "@compose/compose.pkl"
+
+local base = "Qwen/Qwen2.5-0.5B-Instruct"
+local infraStack = "vllm-fleet-infra"
+
+local adapters = new Mapping<String, String> {
+  ["chat"] = "/adapters/chat"
+  ["jailbreak-detector"] = "/adapters/jailbreak-detector"
+}
+
+// 2 nodes (matches fleet-infra.pkl). node suffix -> instance label in infra stack.
+local nodeSuffixes = new Listing<String> { "a"; "b" }
+
+// Cross-stack resolvable to a node's public IP (the AWS instance lives in the
+// infra stack, so we reference it explicitly by label/type/stack/property).
+local function nodeHost(suffix: String): formae.Resolvable = new {
+  label = "vllm-node-\(suffix)"
+  type = "AWS::EC2::Instance"
+  stack = infraStack
+  property = "PublicIp"
+}
+
+// node-a's chat adapter, pulled out so the chat-UI can wire MODEL via its
+// resolvable (demonstrates LoRAAdapterResolvable).
+local chatAdapterA = new vllm.LoRAAdapter {
+  label = "node-a-chat"
+  target = new formae.TargetResolvable { label = "node-a" }
+  loraName = "chat"
+  loraPath = "/adapters/chat"
+  baseModelName = base
+}
+
+forma {
+  new formae.Stack {
+    label = "vllm-fleet"
+    description = "Declared LoRA adapter set + chat UI across the vLLM fleet"
+    policies {
+      new formae.AutoReconcilePolicy { label = "fleet-reconcile"; interval = 30.s }
+    }
+  }
+
+  // Local Docker target for the chat UI.
+  new formae.Target {
+    label = "docker"
+    config = new compose.Config {}
+  }
+
+  // One vLLM target per node; host resolved from the infra instance (no env bridge).
+  for (s in nodeSuffixes) {
+    new formae.Target {
+      label = "node-\(s)"
+      config = new vllm.Config { host = nodeHost(s); port = 8000 }
+    }
+  }
+
+  // node-a's chat adapter (explicit, referenced by the UI).
+  chatAdapterA
+
+  // node-a's jailbreak-detector + node-b's full set, via the loop.
+  new vllm.LoRAAdapter {
+    label = "node-a-jailbreak-detector"
+    target = new formae.TargetResolvable { label = "node-a" }
+    loraName = "jailbreak-detector"
+    loraPath = "/adapters/jailbreak-detector"
+    baseModelName = base
+  }
+  for (name, path in adapters) {
+    new vllm.LoRAAdapter {
+      label = "node-b-\(name)"
+      target = new formae.TargetResolvable { label = "node-b" }
+      loraName = name
+      loraPath = path
+      baseModelName = base
+    }
+  }
+
+  // The chat UI — a container wired by resolvables to node-a's IP + the chat
+  // adapter's id. VLLM_HOST is genuinely late-bound (the EC2 public IP); MODEL
+  // flows from the adapter's resolvable. ${VAR} interpolation happens in compose.
+  new compose.Stack {
+    label = "chat-ui"
+    target = new formae.TargetResolvable { label = "docker" }
+    projectName = "vllm-chat-ui"
+    variables {
+      ["VLLM_HOST"] = nodeHost("a")
+      ["MODEL"] = chatAdapterA.res.id
+    }
+    composeFile = """
+      services:
+        chat-ui:
+          image: formae-chat-ui:demo
+          environment:
+            VLLM_BASE_URL: "http://${VLLM_HOST}:8000"
+            MODEL: "${MODEL}"
+          ports:
+            - "8088:8080"
+      """
+  }
+}
