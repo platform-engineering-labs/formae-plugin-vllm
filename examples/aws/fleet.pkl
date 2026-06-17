@@ -64,12 +64,7 @@ forma {
   for (s in nodeSuffixes) {
     new formae.Target {
       label = "node-\(s)"
-      namespace = "VLLM"
-      config = new Mapping {
-        ["Type"] = "vllm"
-        ["Host"] = nodeHost(s)
-        ["Port"] = 8000
-      }
+      config = new vllm.Config { host = nodeHost(s); port = 8000 }
     }
   }
 

@@ -21,11 +21,7 @@ forma {
 
   new formae.Target {
     label = "local-vllm"
-    namespace = "VLLM"
-    config = new Mapping {
-      ["Type"] = "vllm"
-      ["BaseUrl"] = "http://localhost:8000"
-    }
+    config = new vllm.Config { baseUrl = "http://localhost:8000" }
   }
 
   new vllm.LoRAAdapter {

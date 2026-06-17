@@ -5,6 +5,31 @@ module vllm
 
 import "@formae/formae.pkl"
 
+/// Target connection config for a vLLM node. Supply EITHER an explicit `baseUrl`,
+/// OR a `host` (+ optional `port`/`scheme`) — `host`/`port` may be resolvables so
+/// a target can resolve its endpoint from another resource (e.g. an AWS instance's
+/// public IP). The hidden `type` drives the Target's namespace (`config.type` →
+/// "VLLM"), so a target using this class needs no explicit `namespace`. The
+/// uppercase `Type`/`BaseUrl`/`Host`/`Port`/`Scheme` are the keys the plugin decodes.
+open class Config {
+  hidden fixed type: String = "vllm"
+
+  /// Explicit base URL, e.g. "http://node:8000". Used verbatim; wins over `host`.
+  hidden baseUrl: (String|formae.Resolvable)?
+  /// Host to build the base URL from (may be a resolvable). Used when `baseUrl` is unset.
+  hidden host: (String|formae.Resolvable)?
+  /// Port for the built base URL (plugin default 8000 when unset).
+  hidden port: (Int|formae.Resolvable)?
+  /// Scheme for the built base URL (plugin default "http" when unset).
+  hidden scheme: String?
+
+  fixed Type: String = type
+  fixed BaseUrl: (String|formae.Resolvable)? = baseUrl
+  fixed Host: (String|formae.Resolvable)? = host
+  fixed Port: (Int|formae.Resolvable)? = port
+  fixed Scheme: String? = scheme
+}
+
 /// The LoRAAdapter resource type id, shared by the resource hint, the resource
 /// class, and the resolvable so the three never drift.
 const loraAdapterType: String = "VLLM::Inference::LoRAAdapter"

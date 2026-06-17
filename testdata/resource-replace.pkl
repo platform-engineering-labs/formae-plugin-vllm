@@ -14,11 +14,7 @@ forma {
 
   new formae.Target {
     label = "vllm-target"
-    namespace = "VLLM"
-    config = new Mapping {
-      ["Type"] = "vllm"
-      ["BaseUrl"] = read("env:VLLM_URL")
-    }
+    config = new vllm.Config { baseUrl = read("env:VLLM_URL") }
   }
 
   new vllm.LoRAAdapter {

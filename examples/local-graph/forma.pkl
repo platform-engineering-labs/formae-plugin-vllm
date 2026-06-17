@@ -40,12 +40,7 @@ forma {
   // (http://localhost:8077) — exercises the new Host/Port target config.
   new formae.Target {
     label = "local-vllm"
-    namespace = "VLLM"
-    config = new Mapping {
-      ["Type"] = "vllm"
-      ["Host"] = "localhost"
-      ["Port"] = 8077
-    }
+    config = new vllm.Config { host = "localhost"; port = 8077 }
   }
 
   // Local Docker target for the chat-UI.
