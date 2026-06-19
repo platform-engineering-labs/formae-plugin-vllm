@@ -20,6 +20,17 @@ import "@aws/ec2/securitygroup.pkl"
 import "@aws/ec2/securitygroupingress.pkl"
 import "@aws/ec2/instance.pkl"
 
+/// Shown (and confirmed) before apply — this stack costs money.
+description = new formae.Description {
+  text = """
+    Provisions the vllm-fleet-infra stack into AWS: a VPC + public networking and
+    2x g4dn.xlarge GPU instances (us-east-1) running vLLM on :8000.
+    BILLABLE — roughly $1.05/hr. A 4h TTL auto-destroys it; tear down sooner with
+    `formae destroy fleet-infra.pkl`.
+    """
+  confirm = true
+}
+
 properties {
   region = new formae.Prop { flag = "region"; default = "us-east-1" }
   amiId = new formae.Prop { flag = "ami-id"; default = "ami-0ccab825061167e2b" }

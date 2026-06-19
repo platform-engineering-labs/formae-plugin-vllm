@@ -15,6 +15,17 @@ import "@aws/ec2/instance.pkl"
 import "@vllm/core/vllm.pkl"
 import "@compose/compose.pkl"
 
+/// Shown (and confirmed) before apply.
+description = new formae.Description {
+  text = """
+    Declares the LoRA-adapter set across the vLLM fleet plus a local chat-UI
+    container, wired to the GPU nodes in the vllm-fleet-infra stack via
+    resolvables. Apply fleet-infra.pkl first. No cloud resources are created here
+    — adapters load into the running vLLM nodes and the chat-UI runs locally.
+    """
+  confirm = true
+}
+
 local base = "Qwen/Qwen2.5-0.5B-Instruct"
 
 // Typed cross-stack handle to a node's EC2 instance (declared in the infra
