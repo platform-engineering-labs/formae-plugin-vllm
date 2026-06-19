@@ -20,6 +20,13 @@ spec:
       labels:
         app: vllm
     spec:
+      # A Service named `vllm` makes Kubernetes inject Docker-style service-link
+      # env vars into every pod in the namespace, including VLLM_PORT=tcp://<clusterIP>:8000.
+      # vLLM reads VLLM_PORT as its own integer bind port and crash-loops on the URI
+      # (ValueError → "Engine core initialization failed"). Disabling service links
+      # suppresses the legacy injection while keeping the `vllm` Service and its DNS intact.
+      # See https://docs.vllm.ai/en/stable/serving/env_vars.html
+      enableServiceLinks: false
       containers:
         - name: vllm
           image: vllm/vllm-openai:v0.22.1

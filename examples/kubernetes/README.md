@@ -9,6 +9,21 @@ The `vllm-adapters` PVC mounted at `/models/adapters` is the **adapter
 distribution layer** — vLLM reads `loraPath` from this volume. formae only
 activates (loads/unloads) adapters that are already present on the PVC.
 
+## Why `enableServiceLinks: false`
+
+The Service fronting vLLM is named `vllm` (the natural choice). Kubernetes
+uppercases that to the prefix `VLLM_` and injects legacy Docker-style service-link
+env vars into every pod in the namespace — including `VLLM_PORT=tcp://<clusterIP>:8000`.
+vLLM reads `VLLM_PORT` as its own integer bind port, fails to parse the URI, and the
+engine crash-loops (`ValueError: VLLM_PORT '...' appears to be a URI` →
+`CrashLoopBackOff`) before it ever downloads a weight.
+
+The manifest sets `enableServiceLinks: false` on the PodSpec to suppress the legacy
+injection. The `vllm` Service name and its DNS (`vllm.default.svc.cluster.local`)
+stay intact. If you rename the Deployment's PodSpec or copy it elsewhere, keep this
+field — or don't name a Service after an app that reads `<NAME>_PORT`. See the
+[vLLM env-var docs](https://docs.vllm.ai/en/stable/serving/env_vars.html).
+
 ## Single replica caveat
 
 This manifest runs **one replica**. `POST /v1/load_lora_adapter` only affects the
