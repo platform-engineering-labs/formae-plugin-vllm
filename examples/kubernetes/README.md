@@ -30,9 +30,8 @@ This manifest runs **one replica**. `POST /v1/load_lora_adapter` only affects th
 replica that handled the request — it does **not** propagate across a replica
 fleet, and a new/restarted replica won't have the adapter. Scaling out to
 multiple replicas needs a fleet controller / router (Ray Serve, AIBrix LoRA
-controller, vLLM Production Stack, NVIDIA Dynamo). See the "Scaling &
-distribution" section of `docs/superpowers/specs/2026-06-05-vllm-plugin-design.md`.
-The plugin already abstracts on `target = an OpenAI-compatible base_url`, so a
+controller, vLLM Production Stack, NVIDIA Dynamo). The plugin already abstracts
+on `target = an OpenAI-compatible base_url`, so a
 multi-replica setup means pointing the target at a fleet controller/router, with
 no resource-model change.
 
