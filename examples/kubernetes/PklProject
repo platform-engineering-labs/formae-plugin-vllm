@@ -2,7 +2,12 @@ amends "pkl:Project"
 
 dependencies {
   ["vllm"] {
-    uri = "package://hub.platform.engineering/plugins/vllm/schema/pkl/vllm/vllm@0.1.0"
+    uri = "package://hub.platform.engineering/plugins/vllm/schema/pkl/vllm/vllm@0.1.1"
+  }
+
+  // Kubernetes resource plugin schema — provisions the Deployment/PVC/Service.
+  ["k8s"] {
+    uri = "package://hub.platform.engineering/plugins/k8s/schema/pkl/k8s/k8s@0.1.5"
   }
 
   // Formae schema - fetched from public registry

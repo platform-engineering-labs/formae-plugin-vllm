@@ -1,38 +1,136 @@
 /*
- * Kubernetes example for the formae vLLM plugin.
+ * Kubernetes example for the formae vLLM plugin — fully declarative, no kubectl.
  *
- * vLLM is provisioned by Kubernetes (see vllm-deployment.yaml); formae manages
- * LoRA adapters against the vLLM Service. The PVC mounted at /models/adapters is
- * the adapter distribution layer.
+ * formae provisions the whole stack against your current kubeconfig cluster:
+ * the vLLM Deployment + PersistentVolumeClaim + Service (the inference server)
+ * AND the LoRA adapters loaded on top. One `formae apply`, no `kubectl apply`.
  *
- * Apply with:
  *   formae apply --mode reconcile --simulate examples/kubernetes/forma.pkl
  *   formae apply --mode reconcile           examples/kubernetes/forma.pkl
+ *
+ * Targets a GPU-capable cluster (the Deployment requests nvidia.com/gpu): point
+ * your kubeconfig at it first (CoreWeave, GKE, EKS, edge k3s, ...). Override the
+ * context with `--prop context=<name>` or $K8S_CONTEXT (default: current).
  */
 amends "@formae/forma.pkl"
 
 import "@formae/formae.pkl"
 import "@vllm/core/vllm.pkl"
+import "@k8s/v1.34/k8s.pkl" as k8s
+import "@k8s/v1.34/apps/Deployment.pkl" as dep
+import "@k8s/v1.34/core/Service.pkl" as svc
+import "@k8s/v1.34/core/PersistentVolumeClaim.pkl" as pvc
+
+local kubectlContext = read?("prop:context") ?? read?("env:K8S_CONTEXT")
+local ns = "default"
+local appLabels = new Mapping<String, String> { ["app"] = "vllm" }
+
+// ── Targets ──────────────────────────────────────────────────────────────────
+// The cluster: formae manages the Kubernetes resources against your kubeconfig.
+local k8sTarget = new formae.Target {
+  label = "k8s"
+  config = new k8s.Config {
+    kubernetesVersion = "1.34"
+    auth = new k8s.KubeconfigAuth {
+      when (kubectlContext != null) { context = kubectlContext }
+    }
+  }
+}
+
+// The vLLM server: formae manages LoRA adapters against the in-cluster Service
+// declared below. Out-of-cluster, `kubectl port-forward svc/vllm 8000:8000` and
+// set baseUrl = "http://localhost:8000".
+local vllmTarget = new formae.Target {
+  label = "vllm"
+  config = new vllm.Config { baseUrl = "http://vllm.\(ns).svc.cluster.local:8000" }
+}
 
 forma {
   new formae.Stack {
     label = "vllm-k8s"
-    description = "Kubernetes vLLM adapter example"
+    description = "Kubernetes vLLM server + LoRA adapters, end to end"
   }
 
-  new formae.Target {
-    label = "k8s-vllm"
-    // In-cluster DNS name of the vLLM Service (default namespace). For
-    // out-of-cluster access, `kubectl port-forward svc/vllm 8000:8000` and set
-    // baseUrl = "http://localhost:8000".
-    config = new vllm.Config { baseUrl = "http://vllm.default.svc.cluster.local:8000" }
+  k8sTarget
+  vllmTarget
+
+  // ── PersistentVolumeClaim — the adapter distribution layer ──────────────────
+  new pvc.PersistentVolumeClaim {
+    target = k8sTarget.res
+    label = "vllm-adapters"
+    metadata = new k8s.NamespacedObjectMeta { name = "vllm-adapters"; namespace = ns }
+    spec = new pvc.PersistentVolumeClaimSpec {
+      accessModes = new Listing { "ReadWriteOnce" }
+      resources = new k8s.ResourceRequirements {
+        requests = new Mapping { ["storage"] = "5Gi" }
+      }
+    }
   }
 
+  // ── Deployment — single-replica vLLM server with runtime LoRA loading ───────
+  new dep.Deployment {
+    target = k8sTarget.res
+    label = "vllm"
+    metadata = new k8s.NamespacedObjectMeta { name = "vllm"; namespace = ns; labels = appLabels }
+    spec = new dep.DeploymentSpec {
+      replicas = 1
+      selector = new k8s.LabelSelector { matchLabels = appLabels }
+      template = new k8s.PodTemplateSpec {
+        metadata = new k8s.ObjectMeta { name = "vllm"; labels = appLabels }
+        spec = new k8s.PodSpec {
+          // A Service named `vllm` makes Kubernetes inject VLLM_PORT=tcp://<clusterIP>:8000
+          // into the pod, which vLLM mis-parses as its own bind port and crash-loops
+          // (ValueError -> "Engine core initialization failed"). Disabling service links
+          // suppresses the legacy injection while keeping the `vllm` Service + its DNS
+          // intact. See https://docs.vllm.ai/en/stable/serving/env_vars.html
+          enableServiceLinks = false
+          containers = new Listing {
+            new k8s.Container {
+              name = "vllm"
+              image = "vllm/vllm-openai:v0.22.1"
+              args = new Listing { "--model"; "Qwen/Qwen2.5-0.5B-Instruct"; "--enable-lora"; "--max-lora-rank"; "64" }
+              env = new Listing {
+                // Required so /v1/load_lora_adapter and /v1/unload_lora_adapter work.
+                new k8s.EnvVar { name = "VLLM_ALLOW_RUNTIME_LORA_UPDATING"; value = "True" }
+              }
+              ports = new Listing { new k8s.ContainerPort { containerPort = 8000 } }
+              resources = new k8s.ResourceRequirements {
+                limits = new Mapping { ["nvidia.com/gpu"] = "1" }
+              }
+              volumeMounts = new Listing {
+                new k8s.VolumeMount { name = "adapters"; mountPath = "/models/adapters" }
+              }
+            }
+          }
+          volumes = new Listing {
+            new k8s.Volume {
+              name = "adapters"
+              persistentVolumeClaim = new k8s.PersistentVolumeClaimVolumeSource { claimName = "vllm-adapters" }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── Service — fronts the OpenAI-compatible API on :8000 ─────────────────────
+  new svc.Service {
+    target = k8sTarget.res
+    label = "vllm-svc"
+    metadata = new k8s.NamespacedObjectMeta { name = "vllm"; namespace = ns; labels = appLabels }
+    spec = new svc.ServiceSpec {
+      selector = appLabels
+      ports = new Listing { new svc.ServicePort { port = 8000; targetPort = 8000 } }
+    }
+  }
+
+  // ── LoRA adapter — loaded onto the running vLLM server via its API ──────────
+  // Stage the adapter onto the PVC at /models/adapters/demo-adapter first (the
+  // plugin only activates adapters already present on the volume).
   new vllm.LoRAAdapter {
+    target = vllmTarget.res
     label = "demo-adapter"
     loraName = "demo"
-    // Path on the PVC mounted into the vLLM pod at /models/adapters.
-    // Stage the adapter onto the PVC before applying.
     loraPath = "/models/adapters/demo-adapter"
     baseModelName = "Qwen/Qwen2.5-0.5B-Instruct"
   }
