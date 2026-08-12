@@ -16,6 +16,12 @@ type TargetConfig struct {
 	Host    string `json:"Host"`
 	Port    int    `json:"Port"`
 	Scheme  string `json:"Scheme"`
+
+	// APIKey is the bearer token when declared in the target config, where it
+	// may originate from a formae-managed secret that the agent resolves live
+	// before every call. A pointer so a declared but empty key is
+	// distinguishable from an absent one.
+	APIKey *string `json:"ApiKey,omitempty"`
 }
 
 // ParseTargetConfig decodes the JSON target config. If BaseUrl is set it is used
@@ -44,7 +50,20 @@ func ParseTargetConfig(data json.RawMessage) (*TargetConfig, error) {
 	return &cfg, nil
 }
 
-// APIKey returns the optional bearer token from the environment. Empty = no auth.
-func APIKey() string {
-	return os.Getenv("VLLM_API_KEY")
+// APIKey returns the bearer token to authenticate with, preferring the target
+// config over VLLM_API_KEY. An empty result means no auth, which is a supported
+// setup: a vLLM server started without --api-key accepts unauthenticated calls.
+//
+// A key declared in the target config is used as given. Falling back from an
+// empty one would authenticate as whoever the environment names, and sending no
+// key at all would silently talk to the server unauthenticated, so both are
+// reported instead.
+func APIKey(cfg *TargetConfig) (string, error) {
+	if cfg != nil && cfg.APIKey != nil {
+		if *cfg.APIKey == "" {
+			return "", fmt.Errorf("vllm api key in target config is empty; omit ApiKey to use VLLM_API_KEY or to call an unauthenticated server")
+		}
+		return *cfg.APIKey, nil
+	}
+	return os.Getenv("VLLM_API_KEY"), nil
 }

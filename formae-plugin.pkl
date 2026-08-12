@@ -31,7 +31,7 @@ license = "FSL-1.1-ALv2"
 // Minimum compatible formae agent version. Pinned manually to 0.86.0: this plugin
 // targets the current stable agent. (The SDK's own MinFormaeVersion floor is still
 // 0.84.0 as of pkg/plugin@v0.3.0, so the Makefile no longer auto-stamps this.)
-minFormaeVersion = "0.86.0"
+minFormaeVersion = "0.89.0"
 
 output {
   renderer = new JsonRenderer {}
