@@ -23,11 +23,27 @@ open class Config {
   /// Scheme for the built base URL (plugin default "http" when unset).
   hidden scheme: String?
 
+  /// Bearer token for a vLLM server started with `--api-key`. Accepts a literal
+  /// string or a resolvable (e.g. sourced from a formae-managed secret, which
+  /// the agent resolves live on every call, so rotating it needs no agent
+  /// restart).
+  ///
+  /// Omit it to fall back to the VLLM_API_KEY environment variable, or to call
+  /// a server that was started without an API key. When set it is used as
+  /// given: a key that resolves to an empty value is an error rather than a
+  /// silent fall back to the environment or a silent unauthenticated call.
+  ///
+  /// Mutable: how the agent authenticates is not where the adapters live, so
+  /// rotating the key updates the target rather than replacing it.
+  @formae.ConfigFieldHint { createOnly = false }
+  hidden apiKey: (String|formae.Resolvable)?
+
   fixed Type: String = type
   fixed BaseUrl: (String|formae.Resolvable)? = baseUrl
   fixed Host: (String|formae.Resolvable)? = host
   fixed Port: (Int|formae.Resolvable)? = port
   fixed Scheme: String? = scheme
+  fixed ApiKey: (String|formae.Resolvable)? = apiKey
 }
 
 /// The LoRAAdapter resource type id, shared by the resource hint, the resource

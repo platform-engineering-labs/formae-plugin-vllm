@@ -55,7 +55,11 @@ func (p *Plugin) client(targetConfig json.RawMessage) (*vllm.Client, error) {
 	if c, ok := p.clients[key]; ok {
 		return c, nil
 	}
-	c := vllm.New(cfg.BaseURL, config.APIKey())
+	apiKey, err := config.APIKey(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c := vllm.New(cfg.BaseURL, apiKey)
 	p.clients[key] = c
 	return c, nil
 }

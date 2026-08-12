@@ -58,3 +58,68 @@ func TestParseTargetConfig_NeitherIsError(t *testing.T) {
 		t.Fatal("expected error when neither BaseUrl nor Host is set")
 	}
 }
+
+func TestAPIKeyComesFromTheTargetConfigWhenDeclared(t *testing.T) {
+	t.Setenv("VLLM_API_KEY", "env-key")
+
+	cfg, err := ParseTargetConfig([]byte(`{"Type":"vllm","BaseUrl":"http://node:8000","ApiKey":"config-key"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	key, err := APIKey(cfg)
+	if err != nil {
+		t.Fatalf("APIKey: %v", err)
+	}
+	if key != "config-key" {
+		t.Fatalf("APIKey = %q, want the target config value", key)
+	}
+}
+
+func TestAPIKeyFallsBackToTheEnvironmentWhenNotDeclared(t *testing.T) {
+	t.Setenv("VLLM_API_KEY", "env-key")
+
+	cfg, err := ParseTargetConfig([]byte(`{"Type":"vllm","BaseUrl":"http://node:8000"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	key, err := APIKey(cfg)
+	if err != nil {
+		t.Fatalf("APIKey: %v", err)
+	}
+	if key != "env-key" {
+		t.Fatalf("APIKey = %q, want the environment value", key)
+	}
+}
+
+// An unauthenticated vLLM server is a supported setup, so no key from any
+// source stays valid rather than becoming an error.
+func TestAPIKeyIsEmptyWhenNeitherSourceSuppliesOne(t *testing.T) {
+	t.Setenv("VLLM_API_KEY", "")
+
+	cfg, err := ParseTargetConfig([]byte(`{"Type":"vllm","BaseUrl":"http://node:8000"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	key, err := APIKey(cfg)
+	if err != nil {
+		t.Fatalf("APIKey: %v", err)
+	}
+	if key != "" {
+		t.Fatalf("APIKey = %q, want empty for an unauthenticated server", key)
+	}
+}
+
+// A declared key that resolves to nothing is a misconfiguration: silently
+// falling back would authenticate as whoever the environment names, and
+// silently sending no key would talk to the server unauthenticated.
+func TestDeclaredButEmptyAPIKeyIsRejected(t *testing.T) {
+	t.Setenv("VLLM_API_KEY", "env-key")
+
+	cfg, err := ParseTargetConfig([]byte(`{"Type":"vllm","BaseUrl":"http://node:8000","ApiKey":""}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := APIKey(cfg); err == nil {
+		t.Fatal("APIKey accepted a declared but empty key")
+	}
+}
