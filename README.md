@@ -121,3 +121,7 @@ responded HTTP 200 and the adapter is genuinely not in `/v1/models`), which lets
 sync tombstone an out-of-band-unloaded adapter from inventory. Restoration after
 such an out-of-band unload is via **re-applying** the source forma (re-apply is
 idempotent: it loads if missing, no-ops if present).
+
+## License
+
+FSL-1.1-ALv2
