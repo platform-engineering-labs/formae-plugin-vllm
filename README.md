@@ -1,6 +1,6 @@
-# formae vLLM plugin
+# vLLM plugin for formae
 
-A [formae](https://docs.formae.io) resource plugin for declaratively managing
+A [formae](https://github.com/platform-engineering-labs/formae) resource plugin for declaratively managing
 **LoRA adapters** on a running [vLLM](https://docs.vllm.ai) server and
 **discovering** the base models it serves. It is built for edge / sovereign
 inference: formae continuously reconciles what a vLLM node serves and detects
@@ -11,6 +11,32 @@ pre-existing GPU hardware).
 The plugin assumes vLLM is already running; it does not provision hosts or GPUs.
 Its target is an already-running, OpenAI-compatible vLLM endpoint, which it
 manages over HTTP.
+
+[formae](https://github.com/platform-engineering-labs/formae) · [Hub](https://hub.platform.engineering/platform.engineering/vllm)
+
+## Install
+
+Requires the formae CLI: see the [quick start](https://docs.formae.ai/documentation/get-started/quickstart).
+
+```bash
+formae plugin install vllm
+```
+
+Restart the formae agent afterwards so it loads the plugin.
+
+**New project:** with the agent running, `formae project init --include vllm my-project` creates `my-project` with a `PklProject` that declares the formae and vllm schema packages, so `import "@vllm/..."` resolves, and a starter `main.pkl`. Don't run it in an existing project: it overwrites both files.
+
+**Existing project:** add the plugin to `dependencies` in your `PklProject`, with the current version from the [hub page](https://hub.platform.engineering/platform.engineering/vllm), then run `pkl project resolve`:
+
+```pkl
+["vllm"] {
+  uri = "package://hub.platform.engineering/plugins/vllm/schema/pkl/vllm/vllm@<version>"
+}
+```
+
+Next: [write your first forma](https://docs.formae.ai/documentation/get-started/write-your-first-forma), then [`formae apply`](https://docs.formae.ai/documentation/reference/cli/apply) (see [apply modes](https://docs.formae.ai/documentation/concepts/apply-modes)).
+
+With an AI coding assistant, use the [formae plugin](https://docs.formae.ai/documentation/guides/ai-coding-assistants) (formerly `formae-mcp`), which can search the hub and fetch plugin examples. The formae documentation is also available as [llms.txt](https://docs.formae.ai/llms.txt).
 
 ## Supported resource types
 
